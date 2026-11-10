@@ -1,8 +1,10 @@
-# Radio Player
+# Linux Navidrome Player
 
-Lightweight **GTK 4 / libadwaita / C++** music player for [Navidrome](https://www.navidrome.org/) (Subsonic API).
+A desktop music player for Linux that connects to a [Navidrome](https://www.navidrome.org/) music server (or another server that speaks the same common “Subsonic” web API that many self-hosted libraries use).
 
-Browse Home / Artists / Albums, play queues with shuffle & repeat, rate and favorite tracks, scrobble plays back to the server, and tune audio with a 10-band EQ.
+Browse your library, play albums and queues, favorite and rate songs, and keep your server’s play history up to date while you listen.
+
+Built with GTK 4 and libadwaita (the usual toolkit for modern GNOME-style Linux apps), in C++.
 
 **License:** [MIT](LICENSE)
 
@@ -10,11 +12,11 @@ Browse Home / Artists / Albums, play queues with shuffle & repeat, rate and favo
 
 ## Requirements
 
-- Linux desktop (Wayland or X11)
+- A Linux desktop (Wayland or X11)
 - CMake **3.20+**
-- C++20 compiler (`g++` or `clang++`)
-- GTK 4, libadwaita, GStreamer, libsoup 3, nlohmann-json
-- A reachable Navidrome (or other Subsonic-compatible) server
+- A C++20 compiler (`g++` or `clang++`)
+- Development packages for GTK 4, libadwaita, GStreamer (audio playback), libsoup 3 (HTTP), and nlohmann-json
+- A Navidrome server you can reach on your network (or another Subsonic-compatible server)
 
 ---
 
@@ -78,17 +80,15 @@ sudo pacman -S --needed \
 
 ## 2. Get the source
 
-Clone your fork/remote (replace the URL with yours):
-
 ```bash
-git clone https://github.com/YOUR_USER/radio-player.git
-cd radio-player
+git clone https://github.com/brett-attk/Linux-Navidrome-Player.git
+cd Linux-Navidrome-Player
 ```
 
 Or, if you already have this directory:
 
 ```bash
-cd /path/to/radio-player
+cd /path/to/Linux-Navidrome-Player
 ```
 
 ---
@@ -115,8 +115,6 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j"$(nproc)"
 ```
 
-Binaries:
-
 | Binary | Path |
 |--------|------|
 | App | `build/radio-player` |
@@ -132,33 +130,36 @@ Binaries:
 
 ### First-time connection
 
-1. On launch, the **Connect to Navidrome** dialog appears (or click **Server** in the header).
+1. On launch, the **Connect to Navidrome** dialog appears (or click **Server** in the header bar).
 2. Enter:
-   - **Server URL** — e.g. `http://192.168.1.10:4533`
+   - **Server URL** — for example `http://192.168.1.10:4533` (Navidrome’s default port is **4533**)
    - **Username**
    - **Password**
-3. Or click **Discover on LAN** to find servers:
-   - UDP Jellyfin discovery on port **7359**
-   - TCP probe of port **4533** on your subnet
+3. Or click **Discover on LAN** to search your local network for a server automatically.
 4. Click **Connect**.
 
-Credentials are stored locally at:
+Saved settings live on your machine only:
 
-```text
-~/.config/radio-player/config.json
-```
+| What | Where |
+|------|--------|
+| Server login | `~/.config/radio-player/config.json` |
+| Last queue / playback position | `~/.config/radio-player/session.json` |
+| Downloaded album art | `~/.cache/radio-player/covers/` |
 
-Playback session (queue / position) is stored at:
+---
 
-```text
-~/.config/radio-player/session.json
-```
+## How listening is recorded on the server (“scrobbling”)
 
-Cover art cache:
+Just starting to stream a file is not enough for Navidrome to treat a song as “played.” The player must also **tell the server** that you listened.
 
-```text
-~/.cache/radio-player/covers/
-```
+That report is traditionally called a **scrobble** (the same idea as Last.fm “scrobbling”): a small message from the player saying “this user listened to this track.”
+
+This app does that in two steps:
+
+1. When a track **starts**, it notifies the server that it is now playing (does not usually increase the play count).
+2. After you have listened long enough — about **30 seconds** or **half the song**, whichever comes first — or when the track ends / you skip after that point, it sends a **submitted** listen. That is what updates **play counts**, **Recently Played**, and similar Home sections on the server.
+
+So if play counts look wrong in another client, check that this player stayed open long enough on the track for a submitted listen to be sent.
 
 ---
 
@@ -183,14 +184,14 @@ Or run the test binary directly:
 cmake --install build --prefix "$HOME/.local"
 ```
 
-Refresh desktop/icon caches (safe to ignore errors if tools are missing):
+Refresh desktop/icon caches (safe to ignore errors if those tools are missing):
 
 ```bash
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 ```
 
-Then launch from your app menu as **Radio Player**, or:
+Then open **Radio Player** from your app menu, or:
 
 ```bash
 ~/.local/bin/radio-player
@@ -200,35 +201,35 @@ Then launch from your app menu as **Radio Player**, or:
 
 ## Features
 
-- **Home** feed from the server: recently played, most played, top artists, recently added, highest rated, favorites, discover
-- Browse **Artists** and **Albums**
-- Transport: previous / play-pause / next, seek, volume
-- Queue with **shuffle** and **repeat** (off / all / one)
-- Favorites and **1–5 star ratings** synced to the server (`star` / `unstar` / `setRating`)
-- **Scrobbling** so Navidrome play counts stay accurate (`scrobble` with `submission=true`)
-- Cover art with memory + disk cache (14-day TTL)
-- Resume last queue and position on launch (press play to continue)
-- 10-band **EQ** with genre presets; can be turned off for flat playback
-- LAN auto-discovery for Navidrome
+- **Home** view driven by the server: recently played, most played, top artists, newly added, highest rated, favorites, and a random “discover” row
+- Browse by **artist** and **album**
+- Playback controls: previous / play-pause / next, seek bar, volume
+- Play queue with **shuffle** and **repeat** (off, all songs, or one song)
+- **Favorites** and **1–5 star ratings** saved back to your Navidrome account
+- Listening reports to the server (see [scrobbling](#how-listening-is-recorded-on-the-server-scrobbling) above) so play history stays accurate
+- Album art cached on disk for about two weeks so covers load quickly next time
+- Remembers your last queue and place in the song on quit; press play to resume
+- **Equalizer** (10 bands) with genre presets; turn it off for normal/flat sound
+- Optional **local network discovery** to find a Navidrome server without typing its address
 
 ---
 
 ## Project layout
 
 ```text
-src/                 Application sources (UI, audio, Subsonic client, …)
+src/                 Application source code
 tests/               Unit tests
-data/icons/          App icon (hicolor theme)
-data/*.desktop.in    Desktop entry template
-CMakeLists.txt       Build definition
-LICENSE              MIT license
+data/icons/          Application icon
+data/*.desktop.in    Desktop menu entry template
+CMakeLists.txt       Build instructions for CMake
+LICENSE              MIT license text
 ```
 
 ---
 
 ## Privacy note
 
-Server username and password are saved in plain text under `~/.config/radio-player/` so the app can reconnect. Do not commit that directory, and treat the machine account as trusted.
+Your server username and password are stored in plain text under `~/.config/radio-player/` so the app can reconnect. Do not share that folder, and only use the app on accounts you trust.
 
 ---
 
@@ -237,17 +238,16 @@ Server username and password are saved in plain text under `~/.config/radio-play
 **App builds but won’t play audio**
 
 ```bash
-# Confirm GStreamer can see plugins
 gst-inspect-1.0 playbin >/dev/null && echo "playbin OK"
 ```
 
-Install the `gstreamer1.0-plugins-*` / `gst-plugins-*` packages listed above if needed.
+If that fails, install the GStreamer plugin packages listed in the dependency section for your distro.
 
 **Connect fails**
 
-- Check URL scheme (`http://` or `https://`) and port (Navidrome default **4533**)
-- Confirm the server allows Subsonic clients for your user
-- Try **Discover on LAN**, or ping from another Subsonic client
+- Confirm the URL includes `http://` or `https://` and the correct port (often **4533**)
+- Confirm your Navidrome user is allowed to use API / Subsonic clients
+- Try **Discover on LAN**, or test the same URL in another music client
 
 **Clean rebuild**
 
