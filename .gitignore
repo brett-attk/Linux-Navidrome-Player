@@ -1,0 +1,43 @@
+# Build trees
+/build/
+/cmake-build-*/
+/out/
+/compile_commands.json
+
+# Compiler / linker junk
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+
+# CMake / CTest
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+install_manifest.txt
+_deps/
+
+# IDE / editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.clangd/
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local secrets / runtime data (never commit)
+.env
+.env.*
+*.pem
+*.key

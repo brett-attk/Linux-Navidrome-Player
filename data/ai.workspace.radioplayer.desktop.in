@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Radio Player
+Comment=Retro Navidrome / Subsonic music player
+Exec=@CMAKE_INSTALL_FULL_BINDIR@/radio-player
+Icon=ai.workspace.radioplayer
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=ai.workspace.radioplayer
