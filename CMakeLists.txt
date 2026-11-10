@@ -54,6 +54,7 @@ add_executable(radio-player
   src/ui/connect_dialog.cpp
   src/ui/cover_loader.cpp
   src/ui/eq_dialog.cpp
+  src/ui/beat_stage.cpp
   src/ui/main_window.cpp
 )
 

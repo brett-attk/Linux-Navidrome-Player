@@ -11,6 +11,7 @@ struct AppConfig {
   std::string username;
   std::string password;
   double volume = 0.8;
+  bool minimal_player = false;
   audio::EqSettings eq;
 };
 

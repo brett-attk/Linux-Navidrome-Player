@@ -8,20 +8,76 @@
 #include <atomic>
 #include <cmath>
 #include <memory>
+#include <vector>
 
 namespace radio::audio {
 namespace {
 
-// Passed as void* into C-style GStreamer / GLib callbacks.
 struct WatchContext {
   Player* self = nullptr;
   std::shared_ptr<std::atomic<bool>> alive;
 };
 
+constexpr int kSpectrumFftBands = 64;
+constexpr int kSpectrumThresholdDb = -80;
+// Keep analyzer messages snappy so UI beats land close to audible hits.
+constexpr guint64 kSpectrumIntervalNs = 20 * GST_MSECOND;
+
+std::vector<float> read_magnitude_array(const GValue* magnitudes) {
+  std::vector<float> out;
+  if (!magnitudes) {
+    return out;
+  }
+  if (GST_VALUE_HOLDS_ARRAY(magnitudes)) {
+    const guint n = gst_value_array_get_size(magnitudes);
+    out.resize(n);
+    for (guint i = 0; i < n; ++i) {
+      out[i] = g_value_get_float(gst_value_array_get_value(magnitudes, i));
+    }
+    return out;
+  }
+  if (GST_VALUE_HOLDS_LIST(magnitudes)) {
+    const guint n = gst_value_list_get_size(magnitudes);
+    out.resize(n);
+    for (guint i = 0; i < n; ++i) {
+      out[i] = g_value_get_float(gst_value_list_get_value(magnitudes, i));
+    }
+    return out;
+  }
+  return out;
+}
+
+float db_to_level(float db) {
+  const float clamped =
+      std::clamp(db, static_cast<float>(kSpectrumThresholdDb), 0.0f);
+  const float norm =
+      (clamped - static_cast<float>(kSpectrumThresholdDb)) /
+      static_cast<float>(-kSpectrumThresholdDb);
+  return std::clamp(std::pow(norm, 0.75f) * 0.9f, 0.0f, 1.0f);
+}
+
+bool link_tee_pad(GstElement* tee, GstElement* sink_element) {
+  GstPad* tee_src = gst_element_request_pad_simple(tee, "src_%u");
+  GstPad* sink_pad = gst_element_get_static_pad(sink_element, "sink");
+  if (!tee_src || !sink_pad) {
+    if (tee_src) {
+      gst_element_release_request_pad(tee, tee_src);
+      gst_object_unref(tee_src);
+    }
+    if (sink_pad) {
+      gst_object_unref(sink_pad);
+    }
+    return false;
+  }
+  const bool ok = gst_pad_link(tee_src, sink_pad) == GST_PAD_LINK_OK;
+  gst_object_unref(sink_pad);
+  gst_object_unref(tee_src);
+  return ok;
+}
+
 }  // namespace
 
 Player::Player() {
-  // gst_init is process-wide; only call it once.
   static bool gst_inited = false;
   if (!gst_inited) {
     gst_init(nullptr, nullptr);
@@ -29,14 +85,10 @@ Player::Player() {
   }
   alive_ = std::make_shared<std::atomic<bool>>(true);
   pipeline_ = gst_element_factory_make("playbin", "player");
-  equalizer_ = gst_element_factory_make("equalizer-10bands", "eq");
   if (pipeline_) {
     g_object_set(pipeline_, "volume", volume_, nullptr);
-    if (equalizer_) {
-      // playbin adopts the floating GObject ref from factory_make.
-      g_object_set(pipeline_, "audio-filter", equalizer_, nullptr);
-      apply_eq_to_element();
-    }
+    build_audio_filter();
+    build_audio_sink();
   }
 }
 
@@ -53,18 +105,109 @@ Player::~Player() {
     g_source_remove(bus_watch_id_);
     bus_watch_id_ = 0;
   }
+  if (pipeline_) {
+    GstBus* bus = gst_element_get_bus(GST_ELEMENT(pipeline_));
+    if (bus) {
+      gst_bus_set_sync_handler(bus, nullptr, nullptr, nullptr);
+      gst_object_unref(bus);
+    }
+  }
   state_cb_ = {};
   progress_cb_ = {};
   eos_cb_ = {};
   error_cb_ = {};
   if (pipeline_) {
-    // Clearing audio-filter drops playbin's reference to the equalizer.
     g_object_set(pipeline_, "audio-filter", static_cast<GstElement*>(nullptr),
+                 nullptr);
+    g_object_set(pipeline_, "audio-sink", static_cast<GstElement*>(nullptr),
                  nullptr);
     gst_object_unref(pipeline_);
     pipeline_ = nullptr;
   }
   equalizer_ = nullptr;
+  audio_sink_ = nullptr;
+}
+
+void Player::build_audio_filter() {
+  equalizer_ = gst_element_factory_make("equalizer-10bands", "eq");
+  if (!equalizer_) {
+    return;
+  }
+  g_object_set(pipeline_, "audio-filter", equalizer_, nullptr);
+  apply_eq_to_element();
+}
+
+void Player::build_audio_sink() {
+  auto* bin = gst_bin_new("radio-audio-sink");
+  auto* tee = gst_element_factory_make("tee", "audio-tee");
+  auto* q_play = gst_element_factory_make("queue", "play-queue");
+  auto* sink = gst_element_factory_make("autoaudiosink", "real-sink");
+  auto* q_viz = gst_element_factory_make("queue", "viz-queue");
+  auto* convert = gst_element_factory_make("audioconvert", "viz-convert");
+  auto* spectrum = gst_element_factory_make("spectrum", "spectrum");
+  auto* fakesink = gst_element_factory_make("fakesink", "viz-sink");
+
+  if (!bin || !tee || !q_play || !sink || !q_viz || !convert || !spectrum ||
+      !fakesink) {
+    if (bin) {
+      gst_object_unref(bin);
+    }
+    if (tee) {
+      gst_object_unref(tee);
+    }
+    if (q_play) {
+      gst_object_unref(q_play);
+    }
+    if (sink) {
+      gst_object_unref(sink);
+    }
+    if (q_viz) {
+      gst_object_unref(q_viz);
+    }
+    if (convert) {
+      gst_object_unref(convert);
+    }
+    if (spectrum) {
+      gst_object_unref(spectrum);
+    }
+    if (fakesink) {
+      gst_object_unref(fakesink);
+    }
+    return;
+  }
+
+  g_object_set(bin, "message-forward", TRUE, nullptr);
+  g_object_set(q_play, "max-size-buffers", 0, "max-size-bytes", 0,
+               "max-size-time", static_cast<guint64>(GST_SECOND), nullptr);
+  g_object_set(q_viz, "leaky", 2 /* GST_QUEUE_LEAK_DOWNSTREAM */,
+               "max-size-buffers", 2, "max-size-bytes", 0, "max-size-time",
+               static_cast<guint64>(0), nullptr);
+  g_object_set(spectrum, "bands", static_cast<guint>(kSpectrumFftBands),
+               "threshold", kSpectrumThresholdDb, "interval",
+               kSpectrumIntervalNs, "post-messages", TRUE, "message-phase",
+               FALSE, "multi-channel", FALSE, nullptr);
+  g_object_set(fakesink, "sync", FALSE, "async", FALSE, nullptr);
+
+  gst_bin_add_many(GST_BIN(bin), tee, q_play, sink, q_viz, convert, spectrum,
+                   fakesink, nullptr);
+
+  bool ok = link_tee_pad(tee, q_play) && gst_element_link(q_play, sink);
+  ok = ok && link_tee_pad(tee, q_viz) &&
+       gst_element_link_many(q_viz, convert, spectrum, fakesink, nullptr);
+
+  GstPad* tee_sink = gst_element_get_static_pad(tee, "sink");
+  if (!ok || !tee_sink) {
+    if (tee_sink) {
+      gst_object_unref(tee_sink);
+    }
+    gst_object_unref(bin);
+    return;
+  }
+  gst_element_add_pad(bin, gst_ghost_pad_new("sink", tee_sink));
+  gst_object_unref(tee_sink);
+
+  audio_sink_ = bin;
+  g_object_set(pipeline_, "audio-sink", bin, nullptr);
 }
 
 void Player::set_state_callback(StateCb cb) { state_cb_ = std::move(cb); }
@@ -77,6 +220,60 @@ void Player::set_error_callback(ErrorCb cb) { error_cb_ = std::move(cb); }
 void Player::set_state(State state) {
   state_ = state;
   util::invoke_nothrow(state_cb_, state_);
+}
+
+void Player::store_spectrum(void* structure_ptr) {
+  auto* structure = static_cast<const GstStructure*>(structure_ptr);
+  const GValue* magnitudes = gst_structure_get_value(structure, "magnitude");
+  const auto raw = read_magnitude_array(magnitudes);
+  if (raw.empty()) {
+    return;
+  }
+
+  const std::size_t n = raw.size();
+  const std::size_t bass_n = std::max<std::size_t>(1, n / 8);
+  float bass_sum = 0.0f;
+  float all_sum = 0.0f;
+  for (std::size_t i = 0; i < n; ++i) {
+    const float level = db_to_level(raw[i]);
+    all_sum += level;
+    if (i < bass_n) {
+      bass_sum += level;
+    }
+  }
+
+  BeatLevels levels;
+  levels.bass = std::clamp(bass_sum / static_cast<float>(bass_n), 0.0f, 1.0f);
+  levels.overall = std::clamp(all_sum / static_cast<float>(n), 0.0f, 1.0f);
+
+  {
+    std::lock_guard<std::mutex> lock(beat_mu_);
+    beat_levels_ = levels;
+    ++beat_seq_;
+  }
+}
+
+bool Player::pull_beat_levels(BeatLevels& out) {
+  std::lock_guard<std::mutex> lock(beat_mu_);
+  if (beat_pulled_seq_ == beat_seq_) {
+    return false;
+  }
+  out = beat_levels_;
+  beat_pulled_seq_ = beat_seq_;
+  return true;
+}
+
+int Player::on_bus_sync(void* message_ptr) {
+  auto* message = static_cast<GstMessage*>(message_ptr);
+  if (GST_MESSAGE_TYPE(message) != GST_MESSAGE_ELEMENT) {
+    return GST_BUS_PASS;
+  }
+  const GstStructure* structure = gst_message_get_structure(message);
+  if (!structure || !gst_structure_has_name(structure, "spectrum")) {
+    return GST_BUS_PASS;
+  }
+  store_spectrum(const_cast<GstStructure*>(structure));
+  return GST_BUS_DROP;
 }
 
 bool Player::on_bus_message(void* message_ptr) {
@@ -143,31 +340,39 @@ void Player::ensure_bus_and_tick() {
   if (!pipeline_) {
     return;
   }
-  // Bus watch: GStreamer posts EOS/ERROR/STATE_CHANGED messages here.
   if (!bus_watch_id_) {
     GstBus* bus = gst_element_get_bus(GST_ELEMENT(pipeline_));
     if (!bus) {
       return;
     }
+    auto* sync_data = new WatchContext{this, alive_};
+    gst_bus_set_sync_handler(
+        bus,
+        +[](GstBus*, GstMessage* message, gpointer user_data) -> GstBusSyncReply {
+          auto* d = static_cast<WatchContext*>(user_data);
+          if (!d->alive || !d->alive->load() || !d->self) {
+            return GST_BUS_PASS;
+          }
+          return static_cast<GstBusSyncReply>(d->self->on_bus_sync(message));
+        },
+        sync_data, +[](gpointer p) { delete static_cast<WatchContext*>(p); });
+
     auto* data = new WatchContext{this, alive_};
     bus_watch_id_ = gst_bus_add_watch(
         bus,
         +[](GstBus*, GstMessage* message, gpointer user_data) -> gboolean {
           auto* d = static_cast<WatchContext*>(user_data);
           if (!d->alive || !d->alive->load() || !d->self) {
-            return FALSE;  // remove the watch
+            return FALSE;
           }
           return d->self->on_bus_message(message) ? TRUE : FALSE;
         },
         data);
-    // When the pipeline GObject is destroyed, free WatchContext automatically.
     g_object_set_data_full(G_OBJECT(pipeline_), "radio-bus-data", data,
                            +[](gpointer p) { delete static_cast<WatchContext*>(p); });
     gst_object_unref(bus);
   }
 
-  // Progress timer: ~4 Hz UI updates while playing.
-  // g_timeout_add_full's final arg is a destroy notify for user_data.
   if (!tick_id_) {
     auto* data = new WatchContext{this, alive_};
     tick_id_ = g_timeout_add_full(
@@ -184,7 +389,6 @@ void Player::ensure_bus_and_tick() {
 }
 
 void Player::apply_pending_seek() {
-  // Seeking before the pipeline is ready often fails; defer until PLAYING/PAUSED.
   if (!pipeline_ || pending_seek_ns_ < 0) {
     return;
   }
@@ -300,8 +504,6 @@ void Player::apply_eq_to_element() {
     }
     const double gain =
         eq_.enabled ? eq_.gains_db[static_cast<std::size_t>(i)] : 0.0;
-    // g_object_set varargs for "gdouble" require an actual gdouble, not double
-    // promotion ambiguity on some ABIs.
     const gdouble gain_db = static_cast<gdouble>(std::clamp(gain, -24.0, 12.0));
     g_object_set(band, "gain", gain_db, nullptr);
     g_object_unref(band);

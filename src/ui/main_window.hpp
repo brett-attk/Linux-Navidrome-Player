@@ -6,6 +6,9 @@
 #include "session.hpp"
 #include "subsonic/client.hpp"
 #include "subsonic/models.hpp"
+#include "ui/beat_stage.hpp"
+
+#include <memory>
 
 #include <adwaita.h>
 #include <gtk/gtk.h>
@@ -59,6 +62,12 @@ class MainWindow {
   void on_toggle_favorite();
   void on_set_rating(int rating);
   void on_open_eq();
+  void on_toggle_minimal_player();
+  void set_minimal_player(bool minimal);
+  void ensure_beat_stage_timer();
+  void stop_beat_stage_timer();
+  bool on_beat_stage_tick();
+  void sync_beat_stage_active();
   void apply_eq_settings(const audio::EqSettings& settings);
   void apply_song_annotation_locally(const std::string& song_id,
                                      const subsonic::Annotations& annotations);
@@ -87,6 +96,9 @@ class MainWindow {
 
   AdwApplication* app_ = nullptr;
   AdwApplicationWindow* window_ = nullptr;
+  AdwToolbarView* toolbar_view_ = nullptr;
+  GtkWidget* browse_paned_ = nullptr;
+  GtkWidget* player_bar_ = nullptr;
 
   GtkStack* browse_stack_ = nullptr;
   GtkStack* main_stack_ = nullptr;
@@ -112,8 +124,11 @@ class MainWindow {
   GtkToggleButton* shuffle_button_ = nullptr;
   GtkButton* repeat_button_ = nullptr;
   GtkToggleButton* favorite_button_ = nullptr;
+  GtkWidget* rating_box_ = nullptr;
   GtkButton* clear_rating_button_ = nullptr;
+  GtkWidget* volume_box_ = nullptr;
   GtkButton* eq_button_ = nullptr;
+  GtkToggleButton* minimal_button_ = nullptr;
   std::vector<GtkToggleButton*> rating_buttons_;
 
   subsonic::Client client_;
@@ -140,6 +155,13 @@ class MainWindow {
   bool seeking_ = false;              // user is dragging the seek bar
   bool scrobbled_current_ = false;    // already sent submission=true for this track
   bool updating_annotation_ui_ = false;  // ignore toggle signals we caused ourselves
+  bool updating_minimal_ui_ = false;     // ignore toggle signals we caused ourselves
+  bool minimal_player_ = false;
+  NavPage current_nav_ = NavPage::Home;
+  int normal_window_width_ = 1100;
+  int normal_window_height_ = 720;
+  unsigned beat_stage_timer_id_ = 0;
+  std::unique_ptr<BeatStage> beat_stage_;
   std::string current_song_id_;
   // Home loads several endpoints in parallel. `home_loads_pending_` counts
   // outstanding replies; `home_generation_` invalidates stale replies if the

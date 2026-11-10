@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace radio::audio {
@@ -16,9 +17,15 @@ enum class State {
   Paused,
 };
 
+// Lightweight bass/overall energy for UI visualizers. Captured off the
+// playback path and polled from the UI thread.
+struct BeatLevels {
+  float bass = 0.0f;     // 0..1
+  float overall = 0.0f;  // 0..1
+};
+
 // Thin C++ wrapper around GStreamer playbin + equalizer-10bands.
-// UI code registers callbacks; this class talks to the pipeline and forwards
-// EOS / error / progress events back on the GLib main loop.
+// Spectrum analysis runs on a leaky side-chain so it cannot block playback.
 class Player {
  public:
   using StateCb = std::function<void(State)>;
@@ -55,6 +62,10 @@ class Player {
 
   State state() const { return state_; }
 
+  // Thread-safe snapshot for visualizers. Returns true when new analyzer
+  // data arrived since the previous successful pull.
+  bool pull_beat_levels(BeatLevels& out);
+
  private:
   void set_state(State state);
   bool on_bus_message(void* message);
@@ -62,18 +73,26 @@ class Player {
   void apply_pending_seek();
   void ensure_bus_and_tick();
   void apply_eq_to_element();
+  void build_audio_filter();
+  void build_audio_sink();
+  void store_spectrum(void* structure);
+  int on_bus_sync(void* message);
 
   void* pipeline_ = nullptr;   // GstElement* playbin
   void* equalizer_ = nullptr;  // GstElement* equalizer-10bands (owned by playbin)
-  unsigned bus_watch_id_ = 0;  // GSource id from gst_bus_add_watch
-  unsigned tick_id_ = 0;       // GSource id from g_timeout_add_full
+  void* audio_sink_ = nullptr; // GstBin* playback+viz sink (owned by playbin)
+  unsigned bus_watch_id_ = 0;
+  unsigned tick_id_ = 0;
   State state_ = State::Stopped;
   double volume_ = 0.8;
-  // Seek requested before the pipeline reaches PAUSED/PLAYING; applied later.
   std::int64_t pending_seek_ns_ = -1;
   EqSettings eq_;
-  // Shared with bus/tick callbacks so they stop touching `this` after destroy.
   std::shared_ptr<std::atomic<bool>> alive_;
+
+  mutable std::mutex beat_mu_;
+  BeatLevels beat_levels_{};
+  std::uint64_t beat_seq_ = 0;
+  std::uint64_t beat_pulled_seq_ = 0;
 
   StateCb state_cb_;
   ProgressCb progress_cb_;

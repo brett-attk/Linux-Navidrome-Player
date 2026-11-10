@@ -31,6 +31,7 @@ TEST(ConfigStore, save_and_load_roundtrip) {
   cfg.username = "brett";
   cfg.password = "secret";
   cfg.volume = 0.42;
+  cfg.minimal_player = true;
   cfg.eq.enabled = true;
   cfg.eq.preset = "Rock";
   if (const auto* rock = radio::audio::find_eq_preset("Rock")) {
@@ -43,6 +44,7 @@ TEST(ConfigStore, save_and_load_roundtrip) {
   CHECK_EQ(loaded.username, cfg.username);
   CHECK_EQ(loaded.password, cfg.password);
   CHECK_NEAR(loaded.volume, 0.42, 0.0001);
+  CHECK_TRUE(loaded.minimal_player);
   CHECK_TRUE(loaded.eq.enabled);
   CHECK_EQ(loaded.eq.preset, std::string("Rock"));
   CHECK_NEAR(loaded.eq.gains_db[0], cfg.eq.gains_db[0], 0.0001);
@@ -53,6 +55,7 @@ TEST(ConfigStore, missing_file_returns_defaults) {
   const auto cfg = radio::ConfigStore::load();
   CHECK_TRUE(cfg.server_url.empty());
   CHECK_NEAR(cfg.volume, 0.8, 0.0001);
+  CHECK_FALSE(cfg.minimal_player);
   CHECK_FALSE(cfg.eq.enabled);
 }
 

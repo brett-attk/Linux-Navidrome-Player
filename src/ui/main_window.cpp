@@ -4,6 +4,7 @@
 #include "ui/connect_dialog.hpp"
 #include "ui/cover_loader.hpp"
 #include "ui/eq_dialog.hpp"
+#include "ui/beat_stage.hpp"
 #include "util/safe.hpp"
 
 #include <algorithm>
@@ -58,6 +59,7 @@ MainWindow::MainWindow(AdwApplication* app) : app_(app) {
         state == audio::State::Playing ? "media-playback-pause-symbolic"
                                        : "media-playback-start-symbolic";
     gtk_button_set_icon_name(play_pause_button_, icon);
+    sync_beat_stage_active();
   });
 
   player_.set_progress_callback([this](std::int64_t pos, std::int64_t dur) {
@@ -97,6 +99,9 @@ MainWindow::~MainWindow() {
 
 void MainWindow::present() {
   build_ui();
+  if (config_.minimal_player) {
+    set_minimal_player(true);
+  }
   gtk_window_present(GTK_WINDOW(window_));
   if (config_.server_url.empty() || config_.username.empty()) {
     show_connect_dialog(true);
@@ -146,6 +151,11 @@ void MainWindow::on_ui_destroyed() {
     g_source_remove(session_save_id_);
     session_save_id_ = 0;
   }
+  stop_beat_stage_timer();
+  if (beat_stage_) {
+    beat_stage_->detach();
+    beat_stage_.reset();
+  }
   try {
     save_playback_session();
   } catch (...) {
@@ -168,6 +178,15 @@ void MainWindow::on_ui_destroyed() {
   now_title_ = nullptr;
   now_subtitle_ = nullptr;
   home_sections_ = nullptr;
+  minimal_button_ = nullptr;
+  eq_button_ = nullptr;
+  rating_box_ = nullptr;
+  clear_rating_button_ = nullptr;
+  volume_box_ = nullptr;
+  volume_scale_ = nullptr;
+  toolbar_view_ = nullptr;
+  browse_paned_ = nullptr;
+  player_bar_ = nullptr;
   rating_buttons_.clear();
   window_ = nullptr;
 }
@@ -184,11 +203,11 @@ void MainWindow::build_ui() {
                            }),
                            this);
 
-  auto* toolbar_view = adw_toolbar_view_new();
-  adw_application_window_set_content(window_, toolbar_view);
+  toolbar_view_ = ADW_TOOLBAR_VIEW(adw_toolbar_view_new());
+  adw_application_window_set_content(window_, GTK_WIDGET(toolbar_view_));
 
   auto* header = adw_header_bar_new();
-  adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar_view), header);
+  adw_toolbar_view_add_top_bar(toolbar_view_, header);
 
   auto* connect_btn = gtk_button_new_with_label("Server");
   g_signal_connect_swapped(connect_btn, "clicked",
@@ -212,11 +231,12 @@ void MainWindow::build_ui() {
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), GTK_WIDGET(status_label_));
 
   auto* outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-  adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar_view), outer);
+  adw_toolbar_view_set_content(toolbar_view_, outer);
 
-  auto* paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
-  gtk_widget_set_vexpand(paned, TRUE);
-  gtk_box_append(GTK_BOX(outer), paned);
+  browse_paned_ = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+  gtk_widget_set_vexpand(browse_paned_, TRUE);
+  gtk_box_append(GTK_BOX(outer), browse_paned_);
+  auto* paned = browse_paned_;
 
   auto* left = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_set_size_request(left, 260, -1);
@@ -245,11 +265,8 @@ void MainWindow::build_ui() {
   gtk_widget_set_vexpand(GTK_WIDGET(browse_stack_), TRUE);
   gtk_box_append(GTK_BOX(left), GTK_WIDGET(browse_stack_));
 
-  auto* home_side = gtk_label_new("Server playlists &\nlistening history");
-  gtk_label_set_justify(GTK_LABEL(home_side), GTK_JUSTIFY_CENTER);
-  gtk_widget_add_css_class(home_side, "dim-label");
-  gtk_widget_set_valign(home_side, GTK_ALIGN_CENTER);
-  gtk_stack_add_named(browse_stack_, home_side, "home");
+  beat_stage_ = std::make_unique<BeatStage>();
+  gtk_stack_add_named(browse_stack_, beat_stage_->widget(), "home");
 
   auto* artist_scroll = gtk_scrolled_window_new();
   artist_list_ = GTK_LIST_BOX(gtk_list_box_new());
@@ -382,16 +399,16 @@ void MainWindow::build_ui() {
       this);
 
   // Player bar
-  auto* player_bar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
-  gtk_widget_add_css_class(player_bar, "toolbar");
-  gtk_widget_set_margin_top(player_bar, 8);
-  gtk_widget_set_margin_bottom(player_bar, 10);
-  gtk_widget_set_margin_start(player_bar, 12);
-  gtk_widget_set_margin_end(player_bar, 12);
-  gtk_box_append(GTK_BOX(outer), player_bar);
+  player_bar_ = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+  gtk_widget_add_css_class(player_bar_, "toolbar");
+  gtk_widget_set_margin_top(player_bar_, 8);
+  gtk_widget_set_margin_bottom(player_bar_, 10);
+  gtk_widget_set_margin_start(player_bar_, 12);
+  gtk_widget_set_margin_end(player_bar_, 12);
+  gtk_box_append(GTK_BOX(outer), player_bar_);
 
   auto* now_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-  gtk_box_append(GTK_BOX(player_bar), now_row);
+  gtk_box_append(GTK_BOX(player_bar_), now_row);
 
   cover_image_ = GTK_IMAGE(gtk_image_new_from_icon_name("folder-music-symbolic"));
   gtk_image_set_pixel_size(cover_image_, 56);
@@ -411,7 +428,7 @@ void MainWindow::build_ui() {
   gtk_box_append(GTK_BOX(now_text), GTK_WIDGET(now_subtitle_));
 
   auto* seek_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-  gtk_box_append(GTK_BOX(player_bar), seek_row);
+  gtk_box_append(GTK_BOX(player_bar_), seek_row);
   time_elapsed_ = GTK_LABEL(gtk_label_new("0:00"));
   time_total_ = GTK_LABEL(gtk_label_new("0:00"));
   seek_scale_ =
@@ -435,7 +452,18 @@ void MainWindow::build_ui() {
       this);
 
   auto* controls_row = gtk_center_box_new();
-  gtk_box_append(GTK_BOX(player_bar), controls_row);
+  gtk_box_append(GTK_BOX(player_bar_), controls_row);
+
+  minimal_button_ = GTK_TOGGLE_BUTTON(gtk_toggle_button_new());
+  gtk_button_set_icon_name(GTK_BUTTON(minimal_button_),
+                           "view-restore-symbolic");
+  gtk_widget_set_tooltip_text(GTK_WIDGET(minimal_button_),
+                              "Minimal player view");
+  gtk_widget_add_css_class(GTK_WIDGET(minimal_button_), "circular");
+  gtk_widget_set_size_request(GTK_WIDGET(minimal_button_), 44, 44);
+  gtk_widget_set_margin_end(GTK_WIDGET(minimal_button_), 8);
+  gtk_center_box_set_start_widget(GTK_CENTER_BOX(controls_row),
+                                  GTK_WIDGET(minimal_button_));
 
   auto* controls = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
   gtk_center_box_set_center_widget(GTK_CENTER_BOX(controls_row), controls);
@@ -465,10 +493,10 @@ void MainWindow::build_ui() {
   gtk_widget_set_sensitive(GTK_WIDGET(favorite_button_), FALSE);
   gtk_box_append(GTK_BOX(controls), GTK_WIDGET(favorite_button_));
 
-  auto* rating_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-  gtk_widget_add_css_class(rating_box, "linked");
-  gtk_widget_set_tooltip_text(rating_box, "Your rating (saved on Navidrome)");
-  gtk_box_append(GTK_BOX(controls), rating_box);
+  rating_box_ = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  gtk_widget_add_css_class(rating_box_, "linked");
+  gtk_widget_set_tooltip_text(rating_box_, "Your rating (saved on Navidrome)");
+  gtk_box_append(GTK_BOX(controls), rating_box_);
   rating_buttons_.clear();
   GtkToggleButton* rating_group = nullptr;
   for (int i = 1; i <= 5; ++i) {
@@ -480,7 +508,7 @@ void MainWindow::build_ui() {
       rating_group = btn;
     }
     gtk_widget_set_sensitive(GTK_WIDGET(btn), FALSE);
-    gtk_box_append(GTK_BOX(rating_box), GTK_WIDGET(btn));
+    gtk_box_append(GTK_BOX(rating_box_), GTK_WIDGET(btn));
     rating_buttons_.push_back(btn);
     g_signal_connect(
         btn, "toggled",
@@ -506,17 +534,17 @@ void MainWindow::build_ui() {
                            }),
                            this);
 
-  auto* vol_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-  gtk_widget_set_margin_start(vol_box, 24);
-  gtk_box_append(GTK_BOX(controls), vol_box);
-  gtk_box_append(GTK_BOX(vol_box),
+  volume_box_ = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  gtk_widget_set_margin_start(volume_box_, 24);
+  gtk_box_append(GTK_BOX(controls), volume_box_);
+  gtk_box_append(GTK_BOX(volume_box_),
                  gtk_image_new_from_icon_name("audio-volume-high-symbolic"));
   volume_scale_ =
       GTK_SCALE(gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 1, 0.01));
   gtk_widget_set_size_request(GTK_WIDGET(volume_scale_), 120, -1);
   gtk_scale_set_draw_value(volume_scale_, FALSE);
   gtk_range_set_value(GTK_RANGE(volume_scale_), config_.volume);
-  gtk_box_append(GTK_BOX(vol_box), GTK_WIDGET(volume_scale_));
+  gtk_box_append(GTK_BOX(volume_box_), GTK_WIDGET(volume_scale_));
 
   eq_button_ = GTK_BUTTON(gtk_button_new_with_label("EQ"));
   gtk_widget_set_tooltip_text(GTK_WIDGET(eq_button_), "Open equalizer");
@@ -538,6 +566,11 @@ void MainWindow::build_ui() {
       "  min-height: 44px;"
       "  padding: 0;"
       "  font-weight: 700;"
+      "}"
+      ".beat-stage {"
+      "  background-color: #080a14;"
+      "  border-radius: 8px;"
+      "  margin: 8px;"
       "}");
   gtk_style_context_add_provider_for_display(
       gdk_display_get_default(), GTK_STYLE_PROVIDER(css),
@@ -547,6 +580,12 @@ void MainWindow::build_ui() {
   g_signal_connect_swapped(eq_button_, "clicked",
                            G_CALLBACK(+[](gpointer self) {
                              static_cast<MainWindow*>(self)->on_open_eq();
+                           }),
+                           this);
+  g_signal_connect_swapped(minimal_button_, "toggled",
+                           G_CALLBACK(+[](gpointer self) {
+                             static_cast<MainWindow*>(self)
+                                 ->on_toggle_minimal_player();
                            }),
                            this);
 
@@ -614,6 +653,7 @@ void MainWindow::build_ui() {
 }
 
 void MainWindow::set_nav(NavPage page) {
+  current_nav_ = page;
   switch (page) {
     case NavPage::Home:
       gtk_stack_set_visible_child_name(browse_stack_, "home");
@@ -635,6 +675,7 @@ void MainWindow::set_nav(NavPage page) {
       }
       break;
   }
+  sync_beat_stage_active();
 }
 
 GtkWidget* MainWindow::make_home_section(const char* title, GtkWidget* row) {
@@ -1610,6 +1651,168 @@ void MainWindow::on_open_eq() {
       GTK_WINDOW(window_), config_.eq,
       [this](const audio::EqSettings& settings) { apply_eq_settings(settings); });
   dialog->present();
+}
+
+void MainWindow::on_toggle_minimal_player() {
+  if (updating_minimal_ui_ || !GTK_IS_TOGGLE_BUTTON(minimal_button_)) {
+    return;
+  }
+  set_minimal_player(gtk_toggle_button_get_active(minimal_button_));
+  ConfigStore::save(config_);
+}
+
+void MainWindow::ensure_beat_stage_timer() {
+  if (beat_stage_timer_id_ || !ui_alive_) {
+    return;
+  }
+  beat_stage_timer_id_ = g_timeout_add(
+      16, +[](gpointer self) -> gboolean {
+        return static_cast<MainWindow*>(self)->on_beat_stage_tick()
+                   ? G_SOURCE_CONTINUE
+                   : G_SOURCE_REMOVE;
+      },
+      this);
+}
+
+void MainWindow::stop_beat_stage_timer() {
+  if (!beat_stage_timer_id_) {
+    return;
+  }
+  g_source_remove(beat_stage_timer_id_);
+  beat_stage_timer_id_ = 0;
+}
+
+void MainWindow::sync_beat_stage_active() {
+  if (!beat_stage_) {
+    return;
+  }
+  const bool should_run =
+      ui_alive_ && !minimal_player_ && current_nav_ == NavPage::Home &&
+      player_.state() == audio::State::Playing;
+  beat_stage_->set_active(should_run);
+  if (should_run) {
+    ensure_beat_stage_timer();
+  }
+}
+
+bool MainWindow::on_beat_stage_tick() {
+  if (!ui_alive_ || !beat_stage_) {
+    beat_stage_timer_id_ = 0;
+    return false;
+  }
+
+  const bool should_run = !minimal_player_ && current_nav_ == NavPage::Home &&
+                          player_.state() == audio::State::Playing;
+  if (should_run) {
+    audio::BeatLevels levels;
+    if (player_.pull_beat_levels(levels)) {
+      beat_stage_->on_levels(levels.bass, levels.overall);
+    }
+  } else {
+    beat_stage_->set_active(false);
+  }
+
+  const bool keep_going = beat_stage_->tick();
+  if (!keep_going) {
+    beat_stage_timer_id_ = 0;
+  }
+  return keep_going;
+}
+
+void MainWindow::set_minimal_player(bool minimal) {
+  if (!ui_alive_) {
+    return;
+  }
+  const bool changed = minimal_player_ != minimal;
+  minimal_player_ = minimal;
+  config_.minimal_player = minimal;
+
+  updating_minimal_ui_ = true;
+  if (GTK_IS_TOGGLE_BUTTON(minimal_button_)) {
+    if (gtk_toggle_button_get_active(minimal_button_) != minimal) {
+      gtk_toggle_button_set_active(minimal_button_, minimal);
+    }
+    gtk_button_set_icon_name(
+        GTK_BUTTON(minimal_button_),
+        minimal ? "view-fullscreen-symbolic" : "view-restore-symbolic");
+    gtk_widget_set_tooltip_text(
+        GTK_WIDGET(minimal_button_),
+        minimal ? "Expand to full player" : "Minimal player view");
+    if (minimal) {
+      gtk_widget_add_css_class(GTK_WIDGET(minimal_button_), "suggested-action");
+    } else {
+      gtk_widget_remove_css_class(GTK_WIDGET(minimal_button_),
+                                  "suggested-action");
+    }
+  }
+  updating_minimal_ui_ = false;
+
+  if (browse_paned_) {
+    gtk_widget_set_visible(browse_paned_, !minimal);
+  }
+  sync_beat_stage_active();
+  if (toolbar_view_) {
+    // Keep the title bar in mini mode so the window stays draggable.
+    adw_toolbar_view_set_reveal_top_bars(toolbar_view_, TRUE);
+    adw_toolbar_view_set_extend_content_to_top_edge(toolbar_view_, FALSE);
+    adw_toolbar_view_set_extend_content_to_bottom_edge(toolbar_view_, FALSE);
+  }
+  if (rating_box_) {
+    gtk_widget_set_visible(rating_box_, !minimal);
+  }
+  if (GTK_IS_BUTTON(clear_rating_button_)) {
+    gtk_widget_set_visible(GTK_WIDGET(clear_rating_button_), !minimal);
+  }
+  if (volume_box_) {
+    gtk_widget_set_margin_start(volume_box_, minimal ? 8 : 24);
+  }
+  if (GTK_IS_SCALE(volume_scale_)) {
+    gtk_widget_set_size_request(GTK_WIDGET(volume_scale_),
+                                minimal ? 72 : 120, -1);
+  }
+  if (GTK_IS_IMAGE(cover_image_)) {
+    gtk_image_set_pixel_size(cover_image_, minimal ? 44 : 56);
+  }
+  if (player_bar_) {
+    // Even inset on every side under the title bar.
+    constexpr int kMiniPad = 12;
+    gtk_widget_set_margin_top(player_bar_, minimal ? kMiniPad : 8);
+    gtk_widget_set_margin_bottom(player_bar_, minimal ? kMiniPad : 10);
+    gtk_widget_set_margin_start(player_bar_, minimal ? kMiniPad : 12);
+    gtk_widget_set_margin_end(player_bar_, minimal ? kMiniPad : 12);
+    gtk_widget_set_valign(player_bar_, GTK_ALIGN_FILL);
+    gtk_widget_set_vexpand(player_bar_, !minimal);
+  }
+
+  if (!window_) {
+    return;
+  }
+
+  if (minimal) {
+    if (changed && gtk_widget_get_mapped(GTK_WIDGET(window_))) {
+      const int width = gtk_widget_get_width(GTK_WIDGET(window_));
+      const int height = gtk_widget_get_height(GTK_WIDGET(window_));
+      if (width > 1 && height > 1) {
+        normal_window_width_ = width;
+        normal_window_height_ = height;
+      }
+    }
+    constexpr int kMiniPad = 12;
+    constexpr int kMiniWidth = 520;
+    constexpr int kHeaderAllowance = 48;
+    int content_h = 0;
+    if (player_bar_) {
+      gtk_widget_measure(player_bar_, GTK_ORIENTATION_VERTICAL, kMiniWidth,
+                         &content_h, nullptr, nullptr, nullptr);
+    }
+    // Title bar + player content + matching top/bottom pad.
+    const int mini_height =
+        std::max(180, kHeaderAllowance + content_h + (kMiniPad * 2));
+    gtk_window_set_default_size(GTK_WINDOW(window_), kMiniWidth, mini_height);
+  } else if (changed) {
+    gtk_window_set_default_size(GTK_WINDOW(window_), normal_window_width_,
+                                normal_window_height_);
+  }
 }
 
 void MainWindow::set_status(const std::string& text,

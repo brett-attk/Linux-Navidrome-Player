@@ -70,6 +70,7 @@ AppConfig ConfigStore::load() {
     cfg.username = j.value("username", "");
     cfg.password = j.value("password", "");
     cfg.volume = j.value("volume", 0.8);
+    cfg.minimal_player = j.value("minimal_player", false);
     if (j.contains("eq")) {
       cfg.eq = eq_from_json(j["eq"]);
     }
@@ -93,6 +94,7 @@ bool ConfigStore::save(const AppConfig& config) {
         {"username", config.username},
         {"password", config.password},
         {"volume", config.volume},
+        {"minimal_player", config.minimal_player},
         {"eq", eq_to_json(config.eq)},
     };
 
