@@ -62,6 +62,7 @@ class MainWindow {
   void apply_eq_settings(const audio::EqSettings& settings);
   void apply_song_annotation_locally(const std::string& song_id,
                                      const subsonic::Annotations& annotations);
+  void refresh_content_song_rows(const std::string& song_id);
   void set_status(const std::string& text, unsigned clear_after_seconds = 3);
   void set_now_playing(const subsonic::Song& song);
   void load_cover(const std::string& cover_id);
@@ -79,6 +80,8 @@ class MainWindow {
   static std::string format_annotations(const subsonic::Annotations& a);
   static std::string annotate_title(const std::string& title,
                                     const subsonic::Annotations& a);
+  static std::string song_list_title(const subsonic::Song& song);
+  static std::string song_list_subtitle(const subsonic::Song& song);
   static std::vector<subsonic::Artist> artists_from_frequent_albums(
       const std::vector<subsonic::Album>& albums, std::size_t limit);
 

@@ -1155,17 +1155,9 @@ void MainWindow::show_album_songs(const subsonic::Album& album) {
                             std::to_string(content_songs_.size()) + " tracks")
                                .c_str());
         for (const auto& s : content_songs_) {
-          std::string title = s.title;
-          if (s.track > 0) {
-            title = std::to_string(s.track) + ". " + title;
-          }
-          title = annotate_title(title, s.annotations);
-          std::string sub = format_time(s.duration);
-          const auto badge = format_annotations(s.annotations);
-          if (!badge.empty()) {
-            sub += " · " + badge;
-          }
-          gtk_list_box_append(content_list_, make_list_row(title, sub));
+          gtk_list_box_append(content_list_,
+                              make_list_row(song_list_title(s),
+                                            song_list_subtitle(s)));
         }
         set_status(std::to_string(content_songs_.size()) + " songs");
       });
@@ -1428,6 +1420,7 @@ void MainWindow::apply_song_annotation_locally(
     selected_song_.annotations = annotations;
     update_song_details(&selected_song_);
   }
+  refresh_content_song_rows(song_id);
 
   const auto* playing = queue_.current();
   if (playing && playing->id == song_id) {
@@ -1451,6 +1444,34 @@ void MainWindow::apply_song_annotation_locally(
     }
   }
   sync_playing_annotation_controls();
+}
+
+void MainWindow::refresh_content_song_rows(const std::string& song_id) {
+  if (!content_is_songs_ || !GTK_IS_LIST_BOX(content_list_) || song_id.empty()) {
+    return;
+  }
+  for (std::size_t i = 0; i < content_songs_.size(); ++i) {
+    const auto& song = content_songs_[i];
+    if (song.id != song_id) {
+      continue;
+    }
+    auto* row =
+        gtk_list_box_get_row_at_index(content_list_, static_cast<int>(i));
+    if (!row) {
+      continue;
+    }
+    auto* box = gtk_list_box_row_get_child(row);
+    if (!box) {
+      continue;
+    }
+    auto* title_w = gtk_widget_get_first_child(box);
+    auto* subtitle_w = title_w ? gtk_widget_get_next_sibling(title_w) : nullptr;
+    if (!GTK_IS_LABEL(title_w) || !GTK_IS_LABEL(subtitle_w)) {
+      continue;
+    }
+    gtk_label_set_text(GTK_LABEL(title_w), song_list_title(song).c_str());
+    gtk_label_set_text(GTK_LABEL(subtitle_w), song_list_subtitle(song).c_str());
+  }
 }
 
 void MainWindow::on_toggle_favorite() {
@@ -1692,6 +1713,23 @@ std::string MainWindow::annotate_title(const std::string& title,
     return std::string("♥ ") + title;
   }
   return title;
+}
+
+std::string MainWindow::song_list_title(const subsonic::Song& song) {
+  std::string title = song.title;
+  if (song.track > 0) {
+    title = std::to_string(song.track) + ". " + title;
+  }
+  return annotate_title(title, song.annotations);
+}
+
+std::string MainWindow::song_list_subtitle(const subsonic::Song& song) {
+  std::string sub = format_time(song.duration);
+  const auto badge = format_annotations(song.annotations);
+  if (!badge.empty()) {
+    sub += " · " + badge;
+  }
+  return sub;
 }
 
 }  // namespace radio::ui
