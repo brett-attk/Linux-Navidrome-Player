@@ -178,25 +178,64 @@ Or run the test binary directly:
 
 ---
 
-## 7. Optional: install for your user
+## 7. Install so it appears with your other apps
+
+To put **Radio Player** in your desktop app menu (Activities / Application launcher) with its icon, install the binary, `.desktop` entry, and icon theme files under your user prefix.
+
+Set the install prefix **when configuring** (so the menu entry’s `Exec=` path is correct), then build and install:
 
 ```bash
-cmake --install build --prefix "$HOME/.local"
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="$HOME/.local"
+cmake --build build -j"$(nproc)"
+cmake --install build
 ```
 
-Refresh desktop/icon caches (safe to ignore errors if those tools are missing):
+That installs:
+
+| What | Where |
+|------|--------|
+| Binary | `~/.local/bin/radio-player` |
+| App menu entry | `~/.local/share/applications/ai.workspace.radioplayer.desktop` |
+| Icons | `~/.local/share/icons/hicolor/*/apps/ai.workspace.radioplayer.*` |
+
+Refresh desktop and icon caches (safe to ignore errors if those tools are missing):
 
 ```bash
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 ```
 
-Then open **Radio Player** from your app menu, or:
+Then search for **Radio Player** in your app menu — it should show with the radio icon. You can also run:
 
 ```bash
 ~/.local/bin/radio-player
 ```
 
+Ensure `~/.local/bin` is on your `PATH` if you launch from a terminal.
+
+### System-wide install (optional)
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --build build -j"$(nproc)"
+sudo cmake --install build
+sudo update-desktop-database /usr/local/share/applications 2>/dev/null || true
+sudo gtk-update-icon-cache -f -t /usr/local/share/icons/hicolor 2>/dev/null || true
+```
+
+### Uninstall (user install)
+
+```bash
+rm -f "$HOME/.local/bin/radio-player"
+rm -f "$HOME/.local/share/applications/ai.workspace.radioplayer.desktop"
+rm -f "$HOME/.local/share/icons/hicolor/"*/apps/ai.workspace.radioplayer.*
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+```
 ---
 
 ## Features
