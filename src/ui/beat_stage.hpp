@@ -126,8 +126,8 @@ class BeatStage {
   Effect effect_ = Effect::Fireworks;
   float bass_ = 0.0f;
   float overall_ = 0.0f;
-  float bass_ema_ = 0.0f;
   float cooldown_ = 0.0f;
+  float bass_ema_ = 0.0f;  // kept in sync with onset helper state
   float hue_ = 0.72f;
   float effect_timer_ = 0.0f;
   float effect_duration_ = 12.0f;

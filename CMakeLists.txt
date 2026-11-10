@@ -80,6 +80,8 @@ add_executable(radio-tests
   tests/test_cover_cache.cpp
   tests/test_subsonic_parse.cpp
   tests/test_client_urls.cpp
+  tests/test_beat_math.cpp
+  tests/test_scrobble.cpp
 )
 
 target_include_directories(radio-tests PRIVATE

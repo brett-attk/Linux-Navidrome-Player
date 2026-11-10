@@ -6,6 +6,7 @@
 #include "ui/eq_dialog.hpp"
 #include "ui/beat_stage.hpp"
 #include "util/safe.hpp"
+#include "util/scrobble.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1292,23 +1293,11 @@ void MainWindow::sync_annotation_controls(
 
 void MainWindow::maybe_submit_scrobble(bool force) {
   // Navidrome increments play count only on scrobble(submission=true).
-  // Subsonic guideline: submit after ~30s or half the track (whichever is first),
-  // with a small minimum so tiny clips still count when forced at EOS.
-  if (scrobbled_current_ || current_song_id_.empty()) {
+  if (current_song_id_.empty()) {
     return;
   }
-  const std::int64_t pos = player_.position_ns();
-  const std::int64_t dur = player_.duration_ns();
-  bool eligible = force;
-  if (!eligible && dur > 0) {
-    const std::int64_t half = dur / 2;
-    const std::int64_t thirty = 30 * kNsPerSec;
-    const std::int64_t threshold = std::min(thirty, std::max(half, 4 * kNsPerSec));
-    eligible = pos >= threshold;
-  } else if (!eligible) {
-    eligible = pos >= 30 * kNsPerSec;
-  }
-  if (!eligible) {
+  if (!util::scrobble_eligible(player_.position_ns(), player_.duration_ns(),
+                               force, scrobbled_current_)) {
     return;
   }
   client_.scrobble(current_song_id_, true);

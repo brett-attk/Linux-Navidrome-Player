@@ -1,14 +1,15 @@
 #include "audio/player.hpp"
 
+#include "audio/beat_math.hpp"
 #include "util/safe.hpp"
 
 #include <gst/gst.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
-#include <cmath>
 #include <memory>
-#include <vector>
+#include <span>
 
 namespace radio::audio {
 namespace {
@@ -19,42 +20,8 @@ struct WatchContext {
 };
 
 constexpr int kSpectrumFftBands = 64;
-constexpr int kSpectrumThresholdDb = -80;
-// Keep analyzer messages snappy so UI beats land close to audible hits.
-constexpr guint64 kSpectrumIntervalNs = 20 * GST_MSECOND;
-
-std::vector<float> read_magnitude_array(const GValue* magnitudes) {
-  std::vector<float> out;
-  if (!magnitudes) {
-    return out;
-  }
-  if (GST_VALUE_HOLDS_ARRAY(magnitudes)) {
-    const guint n = gst_value_array_get_size(magnitudes);
-    out.resize(n);
-    for (guint i = 0; i < n; ++i) {
-      out[i] = g_value_get_float(gst_value_array_get_value(magnitudes, i));
-    }
-    return out;
-  }
-  if (GST_VALUE_HOLDS_LIST(magnitudes)) {
-    const guint n = gst_value_list_get_size(magnitudes);
-    out.resize(n);
-    for (guint i = 0; i < n; ++i) {
-      out[i] = g_value_get_float(gst_value_list_get_value(magnitudes, i));
-    }
-    return out;
-  }
-  return out;
-}
-
-float db_to_level(float db) {
-  const float clamped =
-      std::clamp(db, static_cast<float>(kSpectrumThresholdDb), 0.0f);
-  const float norm =
-      (clamped - static_cast<float>(kSpectrumThresholdDb)) /
-      static_cast<float>(-kSpectrumThresholdDb);
-  return std::clamp(std::pow(norm, 0.75f) * 0.9f, 0.0f, 1.0f);
-}
+// Fast enough for visuals; still cheap so the playback branch stays primary.
+constexpr guint64 kSpectrumIntervalNs = 25 * GST_MSECOND;
 
 bool link_tee_pad(GstElement* tee, GstElement* sink_element) {
   GstPad* tee_src = gst_element_request_pad_simple(tee, "src_%u");
@@ -73,6 +40,33 @@ bool link_tee_pad(GstElement* tee, GstElement* sink_element) {
   gst_object_unref(sink_pad);
   gst_object_unref(tee_src);
   return ok;
+}
+
+void abandon_element(GstElement*& element) {
+  if (element) {
+    gst_object_unref(element);
+    element = nullptr;
+  }
+}
+
+// Play-only sink used when the optional visualizer branch cannot be built.
+GstElement* build_play_only_sink() {
+  auto* bin = gst_bin_new("radio-audio-sink");
+  auto* sink = gst_element_factory_make("autoaudiosink", "real-sink");
+  if (!bin || !sink) {
+    abandon_element(bin);
+    abandon_element(sink);
+    return nullptr;
+  }
+  gst_bin_add(GST_BIN(bin), sink);
+  GstPad* sink_pad = gst_element_get_static_pad(sink, "sink");
+  if (!sink_pad) {
+    gst_object_unref(bin);
+    return nullptr;
+  }
+  gst_element_add_pad(bin, gst_ghost_pad_new("sink", sink_pad));
+  gst_object_unref(sink_pad);
+  return bin;
 }
 
 }  // namespace
@@ -138,6 +132,8 @@ void Player::build_audio_filter() {
 }
 
 void Player::build_audio_sink() {
+  // Playback is primary. The spectrum visualizer is optional and attached on
+  // a leaky side-chain so analyzer stalls never block audible audio.
   auto* bin = gst_bin_new("radio-audio-sink");
   auto* tee = gst_element_factory_make("tee", "audio-tee");
   auto* q_play = gst_element_factory_make("queue", "play-queue");
@@ -147,40 +143,51 @@ void Player::build_audio_sink() {
   auto* spectrum = gst_element_factory_make("spectrum", "spectrum");
   auto* fakesink = gst_element_factory_make("fakesink", "viz-sink");
 
-  if (!bin || !tee || !q_play || !sink || !q_viz || !convert || !spectrum ||
-      !fakesink) {
-    if (bin) {
-      gst_object_unref(bin);
-    }
-    if (tee) {
-      gst_object_unref(tee);
-    }
-    if (q_play) {
-      gst_object_unref(q_play);
-    }
-    if (sink) {
-      gst_object_unref(sink);
-    }
-    if (q_viz) {
-      gst_object_unref(q_viz);
-    }
-    if (convert) {
-      gst_object_unref(convert);
-    }
-    if (spectrum) {
-      gst_object_unref(spectrum);
-    }
-    if (fakesink) {
-      gst_object_unref(fakesink);
+  const bool have_play = bin && tee && q_play && sink;
+  const bool have_viz = q_viz && convert && spectrum && fakesink;
+  if (!have_play) {
+    abandon_element(bin);
+    abandon_element(tee);
+    abandon_element(q_play);
+    abandon_element(sink);
+    abandon_element(q_viz);
+    abandon_element(convert);
+    abandon_element(spectrum);
+    abandon_element(fakesink);
+    // Last resort: plain autoaudiosink so music still works.
+    audio_sink_ = build_play_only_sink();
+    if (audio_sink_) {
+      g_object_set(pipeline_, "audio-sink", audio_sink_, nullptr);
     }
     return;
   }
 
+  if (!have_viz) {
+    abandon_element(q_viz);
+    abandon_element(convert);
+    abandon_element(spectrum);
+    abandon_element(fakesink);
+    abandon_element(tee);
+    abandon_element(q_play);
+    gst_bin_add(GST_BIN(bin), sink);
+    GstPad* sink_pad = gst_element_get_static_pad(sink, "sink");
+    if (!sink_pad) {
+      gst_object_unref(bin);
+      return;
+    }
+    gst_element_add_pad(bin, gst_ghost_pad_new("sink", sink_pad));
+    gst_object_unref(sink_pad);
+    audio_sink_ = bin;
+    g_object_set(pipeline_, "audio-sink", bin, nullptr);
+    return;
+  }
+
   g_object_set(bin, "message-forward", TRUE, nullptr);
+  // Playback queue may buffer; visualizer queue must drop instead of blocking.
   g_object_set(q_play, "max-size-buffers", 0, "max-size-bytes", 0,
                "max-size-time", static_cast<guint64>(GST_SECOND), nullptr);
   g_object_set(q_viz, "leaky", 2 /* GST_QUEUE_LEAK_DOWNSTREAM */,
-               "max-size-buffers", 2, "max-size-bytes", 0, "max-size-time",
+               "max-size-buffers", 1, "max-size-bytes", 0, "max-size-time",
                static_cast<guint64>(0), nullptr);
   g_object_set(spectrum, "bands", static_cast<guint>(kSpectrumFftBands),
                "threshold", kSpectrumThresholdDb, "interval",
@@ -192,8 +199,10 @@ void Player::build_audio_sink() {
                    fakesink, nullptr);
 
   bool ok = link_tee_pad(tee, q_play) && gst_element_link(q_play, sink);
-  ok = ok && link_tee_pad(tee, q_viz) &&
-       gst_element_link_many(q_viz, convert, spectrum, fakesink, nullptr);
+  if (ok) {
+    ok = link_tee_pad(tee, q_viz) &&
+         gst_element_link_many(q_viz, convert, spectrum, fakesink, nullptr);
+  }
 
   GstPad* tee_sink = gst_element_get_static_pad(tee, "sink");
   if (!ok || !tee_sink) {
@@ -201,6 +210,11 @@ void Player::build_audio_sink() {
       gst_object_unref(tee_sink);
     }
     gst_object_unref(bin);
+    // Visualizer linkage failed — fall back to play-only so audio still works.
+    audio_sink_ = build_play_only_sink();
+    if (audio_sink_) {
+      g_object_set(pipeline_, "audio-sink", audio_sink_, nullptr);
+    }
     return;
   }
   gst_element_add_pad(bin, gst_ghost_pad_new("sink", tee_sink));
@@ -223,29 +237,36 @@ void Player::set_state(State state) {
 }
 
 void Player::store_spectrum(void* structure_ptr) {
+  // Runs on the GStreamer streaming thread via the sync bus handler.
+  // Keep this allocation-free and short so playback stays smooth.
   auto* structure = static_cast<const GstStructure*>(structure_ptr);
   const GValue* magnitudes = gst_structure_get_value(structure, "magnitude");
-  const auto raw = read_magnitude_array(magnitudes);
-  if (raw.empty()) {
+  if (!magnitudes) {
     return;
   }
 
-  const std::size_t n = raw.size();
-  const std::size_t bass_n = std::max<std::size_t>(1, n / 8);
-  float bass_sum = 0.0f;
-  float all_sum = 0.0f;
-  for (std::size_t i = 0; i < n; ++i) {
-    const float level = db_to_level(raw[i]);
-    all_sum += level;
-    if (i < bass_n) {
-      bass_sum += level;
+  std::array<float, kSpectrumFftBands> raw{};
+  std::size_t n = 0;
+  if (GST_VALUE_HOLDS_ARRAY(magnitudes)) {
+    n = std::min<std::size_t>(gst_value_array_get_size(magnitudes),
+                              raw.size());
+    for (std::size_t i = 0; i < n; ++i) {
+      raw[i] = g_value_get_float(gst_value_array_get_value(
+          magnitudes, static_cast<guint>(i)));
+    }
+  } else if (GST_VALUE_HOLDS_LIST(magnitudes)) {
+    n = std::min<std::size_t>(gst_value_list_get_size(magnitudes), raw.size());
+    for (std::size_t i = 0; i < n; ++i) {
+      raw[i] = g_value_get_float(gst_value_list_get_value(
+          magnitudes, static_cast<guint>(i)));
     }
   }
+  if (n == 0) {
+    return;
+  }
 
-  BeatLevels levels;
-  levels.bass = std::clamp(bass_sum / static_cast<float>(bass_n), 0.0f, 1.0f);
-  levels.overall = std::clamp(all_sum / static_cast<float>(n), 0.0f, 1.0f);
-
+  const BeatLevels levels =
+      levels_from_magnitudes(std::span<const float>(raw.data(), n));
   {
     std::lock_guard<std::mutex> lock(beat_mu_);
     beat_levels_ = levels;

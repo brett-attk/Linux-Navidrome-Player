@@ -250,6 +250,8 @@ gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || tr
 - Remembers your last queue and place in the song on quit; press play to resume
 - **Equalizer** (10 bands) with genre presets; turn it off for normal/flat sound
 - Optional **local network discovery** to find a Navidrome server without typing its address
+- **Minimal player** mode: hide the browse panes and shrink to a compact, draggable player window (toggle in the player bar; preference is remembered)
+- **Beat stage** on Home while a song is playing: random on-beat visuals (fireworks, neon bars, color snow, starfield, and more) with shifting colors. Analysis runs on a leaky side-chain so **playback stays primary** if visuals fall behind
 
 ---
 
@@ -257,7 +259,12 @@ gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || tr
 
 ```text
 src/                 Application source code
-tests/               Unit tests
+  audio/             GStreamer playback, EQ, beat-level analysis
+  ui/                GTK windows (including Home beat stage)
+  queue/             Play queue / shuffle / repeat
+  subsonic/          Navidrome / Subsonic API client
+  util/              Shared helpers (scrobble rules, safe callbacks)
+tests/               Unit tests (queue, config/session, scrobble, beat math, …)
 data/icons/          Application icon
 data/*.desktop.in    Desktop menu entry template
 CMakeLists.txt       Build instructions for CMake

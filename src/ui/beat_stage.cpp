@@ -1,5 +1,7 @@
 #include "ui/beat_stage.hpp"
 
+#include "audio/beat_math.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -166,10 +168,11 @@ void BeatStage::on_levels(float bass, float overall) {
   }
   bass_ = bass;
   overall_ = overall;
-  // Envelope follower: responsive enough to stay on-beat, calm enough to
-  // ignore every little transient.
-  bass_ema_ = bass_ema_ * 0.78f + bass * 0.22f;
-  pulse_ = std::max(pulse_, bass * 0.90f + overall * 0.35f);
+  audio::BeatOnsetState onset{bass_ema_, cooldown_};
+  const auto hit = audio::detect_beat_onset(onset, bass, overall, 0.0f);
+  bass_ema_ = onset.bass_ema;
+  cooldown_ = onset.cooldown;
+  pulse_ = std::max(pulse_, hit.pulse);
   hue_ = std::fmod(hue_ + 0.0025f + overall * 0.01f + bass * 0.004f, 1.0f);
 
   for (std::size_t i = 0; i < bar_levels_.size(); ++i) {
@@ -185,18 +188,14 @@ void BeatStage::on_levels(float bass, float overall) {
     }
   }
 
-  const float spike = bass - bass_ema_;
-  if (cooldown_ <= 0.0f && spike > 0.10f && bass > 0.24f) {
+  if (hit.hit) {
     const int width =
         GTK_IS_DRAWING_AREA(area_) ? gtk_widget_get_width(GTK_WIDGET(area_)) : 0;
     const int height = GTK_IS_DRAWING_AREA(area_)
                            ? gtk_widget_get_height(GTK_WIDGET(area_))
                            : 0;
     if (width > 8 && height > 8) {
-      const float energy =
-          std::clamp(0.4f + spike * 1.8f + overall * 0.45f, 0.35f, 1.0f);
-      on_beat_hit(width, height, energy);
-      cooldown_ = 0.14f + (1.0f - energy) * 0.16f;
+      on_beat_hit(width, height, hit.energy);
     }
   }
 }
