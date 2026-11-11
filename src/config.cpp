@@ -1,5 +1,7 @@
 #include "config.hpp"
 
+#include "util/log.hpp"
+
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -74,8 +76,11 @@ AppConfig ConfigStore::load() {
     if (j.contains("eq")) {
       cfg.eq = eq_from_json(j["eq"]);
     }
-  } catch (...) {
+  } catch (const std::exception& ex) {
     // Keep defaults on parse errors.
+    util::log_warn(std::string{"Config load failed: "} + ex.what());
+  } catch (...) {
+    util::log_warn("Config load failed: unknown error");
   }
   return cfg;
 }

@@ -32,7 +32,7 @@ class MainWindow {
   void present();
 
  private:
-  enum class NavPage { Home, Artists, Albums };
+  enum class NavPage { Home, Artists };
 
   void build_ui();
   void on_ui_destroyed();
@@ -43,10 +43,7 @@ class MainWindow {
   void rebuild_home_sections();
   void refresh_current_view();
   void load_artists();
-  void load_albums();
-  void fetch_albums_page(int offset, unsigned generation);
   void populate_artist_list();
-  void populate_album_list();
   void start_library_poller();
   void stop_library_poller();
   void on_library_snapshot(subsonic::LibrarySnapshot snapshot);
@@ -56,6 +53,8 @@ class MainWindow {
   void sync_annotation_controls(const subsonic::Annotations& annotations,
                                 bool enabled);
   void sync_playing_annotation_controls();
+  // Select/scroll the playing track in the visible song list, if present.
+  void sync_playing_song_list_selection();
   void play_songs(std::vector<subsonic::Song> songs, std::size_t start_index);
   void play_current();
   void maybe_submit_scrobble(bool force = false);
@@ -112,7 +111,6 @@ class MainWindow {
   GtkStack* browse_stack_ = nullptr;
   GtkStack* main_stack_ = nullptr;
   GtkListBox* artist_list_ = nullptr;
-  GtkListBox* album_list_ = nullptr;
   GtkListBox* content_list_ = nullptr;
   GtkLabel* content_title_ = nullptr;
   GtkLabel* song_detail_label_ = nullptr;
@@ -120,7 +118,6 @@ class MainWindow {
   GtkBox* home_sections_ = nullptr;
   GtkToggleButton* home_btn_ = nullptr;
   GtkToggleButton* artists_btn_ = nullptr;
-  GtkToggleButton* albums_btn_ = nullptr;
 
   GtkLabel* now_title_ = nullptr;
   GtkLabel* now_subtitle_ = nullptr;
@@ -147,7 +144,6 @@ class MainWindow {
   AppConfig config_;
 
   std::vector<subsonic::Artist> artists_;
-  std::vector<subsonic::Album> albums_;
   std::vector<subsonic::Album> content_albums_;
   std::vector<subsonic::Song> content_songs_;
   std::vector<subsonic::Album> home_recent_;
@@ -179,7 +175,6 @@ class MainWindow {
   int home_loads_pending_ = 0;
   int home_generation_ = 0;
   unsigned artists_load_generation_ = 0;
-  unsigned albums_load_generation_ = 0;
   unsigned status_clear_id_ = 0;   // g_timeout source id (0 = none)
   unsigned session_save_id_ = 0;
   bool ui_alive_ = false;

@@ -1,6 +1,7 @@
 #include "subsonic/library_poller.hpp"
 
 #include "subsonic/parse.hpp"
+#include "util/log.hpp"
 #include "util/safe.hpp"
 
 #include <glib.h>
@@ -383,6 +384,10 @@ void LibraryPoller::thread_main() {
 
     LibrarySnapshot snapshot = fetch_snapshot(creds);
     syncing_.store(false);
+    if (!snapshot.ok) {
+      util::log_warn("Library sync failed: " +
+                     (snapshot.error.empty() ? "unknown error" : snapshot.error));
+    }
 
     auto* payload = new IdlePayload{std::move(cb), std::move(snapshot)};
     g_idle_add_full(
@@ -430,31 +435,6 @@ LibrarySnapshot LibraryPoller::fetch_snapshot(const Credentials& creds) const {
     snapshot.error = error.empty() ? "Artist sync failed" : error;
     g_object_unref(session);
     return snapshot;
-  }
-
-  constexpr int kPageSize = 500;
-  int offset = 0;
-  while (true) {
-    const std::string albums_url = build_token_api_url(
-        creds.base_url, creds.username, creds.password, "getAlbumList2",
-        {{"type", "alphabeticalByName"},
-         {"size", std::to_string(kPageSize)},
-         {"offset", std::to_string(offset)}});
-    std::vector<Album> page;
-    if (!http_get_text(session, albums_url, body, error) ||
-        !parse_album_list_response(body, page, error)) {
-      snapshot.error = error.empty() ? "Album sync failed" : error;
-      g_object_unref(session);
-      return snapshot;
-    }
-    const int got = static_cast<int>(page.size());
-    snapshot.albums.insert(snapshot.albums.end(),
-                           std::make_move_iterator(page.begin()),
-                           std::make_move_iterator(page.end()));
-    if (got < kPageSize) {
-      break;
-    }
-    offset += got;
   }
 
   // Home dashboard payloads (same endpoints the interactive Home load uses).

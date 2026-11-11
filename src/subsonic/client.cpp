@@ -1,6 +1,7 @@
 #include "subsonic/client.hpp"
 
 #include "subsonic/parse.hpp"
+#include "util/log.hpp"
 #include "util/safe.hpp"
 
 #include <glib.h>
@@ -199,6 +200,9 @@ void Client::request_text(const std::string& url, JsonHandler handler) {
         if (!err && body.empty()) {
           err = ClientError{"Empty response from server"};
         }
+        if (err) {
+          util::log_error("HTTP: " + err->message);
+        }
         util::invoke_nothrow(payload->handler, body, err);
       },
       payload);
@@ -256,6 +260,9 @@ void Client::request_bytes(const std::string& url, BytesCb handler) {
         }
         if (!err && out.empty()) {
           err = ClientError{"Empty cover response"};
+        }
+        if (err) {
+          util::log_warn("Cover HTTP: " + err->message);
         }
         // std::move(out) avoids copying the image buffer into the callback.
         util::invoke_nothrow(payload->handler, std::move(out), err);

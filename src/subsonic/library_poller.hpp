@@ -14,9 +14,8 @@
 namespace radio::subsonic {
 
 struct LibrarySnapshot {
-  // Full library lists
+  // Full artist list for the Artists browse pane
   std::vector<Artist> artists;
-  std::vector<Album> albums;
 
   // Home dashboard sections
   std::vector<Album> home_recent;

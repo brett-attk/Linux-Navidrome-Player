@@ -145,6 +145,7 @@ Saved settings live on your machine only:
 | Server login | `~/.config/radio-player/config.json` |
 | Last queue / playback position | `~/.config/radio-player/session.json` |
 | Downloaded album art | `~/.cache/radio-player/covers/` |
+| Warnings / errors log | `~/.local/state/radio-player/radio-player.log` |
 
 ---
 
@@ -241,7 +242,7 @@ gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || tr
 ## Features
 
 - **Home** view driven by the server: recently played, most played, top artists, newly added, highest rated, favorites, and a random “discover” row
-- Browse by **artist** and **album**
+- Browse by **artist** (and albums within an artist); Home rows also open albums directly
 - Playback controls: previous / play-pause / next, seek bar, volume
 - Play queue with **shuffle** and **repeat** (off, all songs, or one song)
 - **Favorites** and **1–5 star ratings** saved back to your Navidrome account
@@ -252,7 +253,7 @@ gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || tr
 - Optional **local network discovery** to find a Navidrome server without typing its address
 - **Minimal player** mode: hide the browse panes and shrink to a compact, draggable player window (toggle in the player bar; preference is remembered)
 - **Beat stage** on Home while a song is playing: random on-beat visuals (fireworks, neon bars, color snow, starfield, and more) with shifting colors. Analysis runs on a leaky side-chain so **playback stays primary** if visuals fall behind
-- **Background library sync**: Home rows, artists, and albums refresh periodically on a worker thread with its own network session (~45s after connect, then about every 3 minutes), so new server content appears without navigating away — and without interrupting playback
+- **Background library sync**: Home rows and artists refresh periodically on a worker thread with its own network session (~45s after connect, then about every 3 minutes), so new server content appears without navigating away — and without interrupting playback
 
 ---
 
@@ -264,7 +265,7 @@ src/                 Application source code
   ui/                GTK windows (including Home beat stage)
   queue/             Play queue / shuffle / repeat
   subsonic/          Navidrome / Subsonic API client
-  util/              Shared helpers (scrobble rules, safe callbacks)
+  util/              Shared helpers (logging, scrobble rules, safe callbacks)
 tests/               Unit tests (queue, config/session, scrobble, beat math, …)
 data/icons/          Application icon
 data/*.desktop.in    Desktop menu entry template
@@ -295,6 +296,7 @@ If that fails, install the GStreamer plugin packages listed in the dependency se
 - Confirm the URL includes `http://` or `https://` and the correct port (often **4533**)
 - Confirm your Navidrome user is allowed to use API / Subsonic clients
 - Try **Discover on LAN**, or test the same URL in another music client
+- Check `~/.local/state/radio-player/radio-player.log` for recent warnings/errors
 
 **Clean rebuild**
 

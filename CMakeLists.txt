@@ -30,6 +30,7 @@ add_library(radio-core STATIC
   src/audio/player.cpp
   src/queue/play_queue.cpp
   src/discovery/lan_discovery.cpp
+  src/util/log.cpp
 )
 
 target_include_directories(radio-core PUBLIC
@@ -76,6 +77,7 @@ add_executable(radio-tests
   tests/test_main.cpp
   tests/test_play_queue.cpp
   tests/test_util_safe.cpp
+  tests/test_log.cpp
   tests/test_eq_settings.cpp
   tests/test_config_session.cpp
   tests/test_cover_cache.cpp

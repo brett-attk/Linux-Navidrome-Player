@@ -1,5 +1,7 @@
 #pragma once
 
+#include "util/log.hpp"
+
 #include <functional>
 #include <string>
 #include <utility>
@@ -48,8 +50,11 @@ void invoke_nothrow(Fn&& fn, Args&&... args) {
   try {
     // Empty std::function throws bad_function_call here; that is also swallowed.
     std::invoke(std::forward<Fn>(fn), std::forward<Args>(args)...);
-  } catch (...) {
+  } catch (const std::exception& ex) {
     // Keep GTK / GStreamer loops running even if a UI callback throws.
+    log_error(std::string{"Callback exception: "} + ex.what());
+  } catch (...) {
+    log_error("Callback exception: unknown");
   }
 }
 

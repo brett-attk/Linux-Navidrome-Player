@@ -1,6 +1,7 @@
 #include "app_icon.hpp"
 #include "cache/cover_cache.hpp"
 #include "ui/main_window.hpp"
+#include "util/log.hpp"
 
 #include <adwaita.h>
 
@@ -23,6 +24,7 @@ void on_activate(GApplication* app, gpointer) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  radio::util::log_init();
   adw_init();
   g_set_prgname(radio::kAppIconName);
   g_set_application_name("Radio Player");
@@ -34,5 +36,6 @@ int main(int argc, char** argv) {
   const int status = g_application_run(G_APPLICATION(app), argc, argv);
   g_window.reset();  // destroy C++ window before dropping the GApplication ref
   g_object_unref(app);
+  radio::util::log_shutdown();
   return status;
 }

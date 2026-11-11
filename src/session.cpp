@@ -1,5 +1,7 @@
 #include "session.hpp"
 
+#include "util/log.hpp"
+
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -138,7 +140,11 @@ PlaybackSession SessionStore::load() {
         session.order.push_back(item.get<std::size_t>());
       }
     }
+  } catch (const std::exception& ex) {
+    util::log_warn(std::string{"Session load failed: "} + ex.what());
+    return PlaybackSession{};
   } catch (...) {
+    util::log_warn("Session load failed: unknown error");
     return PlaybackSession{};
   }
   return session;

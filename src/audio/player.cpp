@@ -304,11 +304,33 @@ bool Player::on_bus_message(void* message_ptr) {
       set_state(State::Stopped);
       util::invoke_nothrow(eos_cb_);
       break;
+    case GST_MESSAGE_WARNING: {
+      GError* err = nullptr;
+      gchar* debug = nullptr;
+      gst_message_parse_warning(message, &err, &debug);
+      std::string msg = err ? err->message : "GStreamer warning";
+      if (debug && *debug) {
+        msg += " (";
+        msg += debug;
+        msg += ")";
+      }
+      if (err) {
+        g_error_free(err);
+      }
+      g_free(debug);
+      util::log_warn("GStreamer: " + msg);
+      break;
+    }
     case GST_MESSAGE_ERROR: {
       GError* err = nullptr;
       gchar* debug = nullptr;
       gst_message_parse_error(message, &err, &debug);
       std::string msg = err ? err->message : "GStreamer error";
+      if (debug && *debug) {
+        msg += " (";
+        msg += debug;
+        msg += ")";
+      }
       if (err) {
         g_error_free(err);
       }

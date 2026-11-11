@@ -1,6 +1,9 @@
 #include "minitest.hpp"
 
+#include "util/log.hpp"
 #include "util/safe.hpp"
+
+#include <filesystem>
 
 TEST(SafeUtil, detects_network_errors) {
   CHECK_TRUE(radio::util::looks_like_network_error("Connection refused"));
@@ -19,6 +22,12 @@ TEST(SafeUtil, friendly_message) {
 }
 
 TEST(SafeUtil, invoke_nothrow_swallows) {
+  const auto path =
+      (std::filesystem::temp_directory_path() / "radio-player-safe-test.log")
+          .string();
+  radio::util::log_shutdown();
+  radio::util::log_init_for_test(path);
+
   int calls = 0;
   radio::util::invoke_nothrow([&] { ++calls; });
   CHECK_EQ(calls, 1);
@@ -31,4 +40,8 @@ TEST(SafeUtil, invoke_nothrow_swallows) {
 
   std::function<void()> empty;
   radio::util::invoke_nothrow(empty);  // no-op
+
+  radio::util::log_shutdown();
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
 }
