@@ -1738,6 +1738,8 @@ void MainWindow::set_minimal_player(bool minimal) {
 
   if (browse_paned_) {
     gtk_widget_set_visible(browse_paned_, !minimal);
+    // Browse owns leftover vertical space; player bar stays natural height.
+    gtk_widget_set_vexpand(browse_paned_, TRUE);
   }
   sync_beat_stage_active();
   if (toolbar_view_) {
@@ -1769,8 +1771,10 @@ void MainWindow::set_minimal_player(bool minimal) {
     gtk_widget_set_margin_bottom(player_bar_, minimal ? kMiniPad : 10);
     gtk_widget_set_margin_start(player_bar_, minimal ? kMiniPad : 12);
     gtk_widget_set_margin_end(player_bar_, minimal ? kMiniPad : 12);
-    gtk_widget_set_valign(player_bar_, GTK_ALIGN_FILL);
-    gtk_widget_set_vexpand(player_bar_, !minimal);
+    // Never let the player bar eat leftover height — that left a blank grey
+    // strip under the controls after leaving minimal mode.
+    gtk_widget_set_vexpand(player_bar_, FALSE);
+    gtk_widget_set_valign(player_bar_, GTK_ALIGN_END);
   }
 
   if (!window_) {
