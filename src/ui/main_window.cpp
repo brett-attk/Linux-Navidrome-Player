@@ -9,8 +9,10 @@
 #include "util/scrobble.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <memory>
 #include <unordered_set>
 
@@ -153,6 +155,7 @@ void MainWindow::on_ui_destroyed() {
     session_save_id_ = 0;
   }
   stop_beat_stage_timer();
+  stop_library_poller();
   if (beat_stage_) {
     beat_stage_->detach();
     beat_stage_.reset();
@@ -219,10 +222,10 @@ void MainWindow::build_ui() {
   adw_header_bar_pack_start(ADW_HEADER_BAR(header), connect_btn);
 
   auto* refresh_btn = gtk_button_new_from_icon_name("view-refresh-symbolic");
-  gtk_widget_set_tooltip_text(refresh_btn, "Refresh Home from server");
+  gtk_widget_set_tooltip_text(refresh_btn, "Refresh current view from server");
   g_signal_connect_swapped(refresh_btn, "clicked",
                            G_CALLBACK(+[](gpointer self) {
-                             static_cast<MainWindow*>(self)->load_home();
+                             static_cast<MainWindow*>(self)->refresh_current_view();
                            }),
                            this);
   adw_header_bar_pack_start(ADW_HEADER_BAR(header), refresh_btn);
@@ -664,19 +667,30 @@ void MainWindow::set_nav(NavPage page) {
     case NavPage::Artists:
       gtk_stack_set_visible_child_name(browse_stack_, "artists");
       gtk_stack_set_visible_child_name(main_stack_, "library");
-      if (artists_.empty()) {
-        load_artists();
-      }
+      // Always re-fetch so newly scanned library content shows up.
+      load_artists();
       break;
     case NavPage::Albums:
       gtk_stack_set_visible_child_name(browse_stack_, "albums");
       gtk_stack_set_visible_child_name(main_stack_, "library");
-      if (albums_.empty()) {
-        load_albums();
-      }
+      load_albums();
       break;
   }
   sync_beat_stage_active();
+}
+
+void MainWindow::refresh_current_view() {
+  switch (current_nav_) {
+    case NavPage::Home:
+      load_home();
+      break;
+    case NavPage::Artists:
+      load_artists();
+      break;
+    case NavPage::Albums:
+      load_albums();
+      break;
+  }
 }
 
 GtkWidget* MainWindow::make_home_section(const char* title, GtkWidget* row) {
@@ -885,52 +899,7 @@ void MainWindow::load_home() {
     if (--home_loads_pending_ > 0) {
       return;  // still waiting on sibling requests
     }
-
-    clear_container(GTK_WIDGET(home_sections_));
-
-    auto add_album_row = [this](const char* title,
-                                const std::vector<subsonic::Album>& albums) {
-      if (albums.empty()) {
-        return;
-      }
-      auto* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-      for (const auto& album : albums) {
-        gtk_box_append(GTK_BOX(row), make_album_tile(album));
-      }
-      gtk_box_append(home_sections_, make_home_section(title, row));
-    };
-    auto add_artist_row = [this](const char* title,
-                                 const std::vector<subsonic::Artist>& artists) {
-      if (artists.empty()) {
-        return;
-      }
-      auto* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-      for (const auto& artist : artists) {
-        gtk_box_append(GTK_BOX(row), make_artist_tile(artist));
-      }
-      gtk_box_append(home_sections_, make_home_section(title, row));
-    };
-    auto add_song_row = [this](const char* title,
-                               const std::vector<subsonic::Song>& songs) {
-      if (songs.empty()) {
-        return;
-      }
-      auto* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-      for (std::size_t i = 0; i < songs.size(); ++i) {
-        gtk_box_append(GTK_BOX(row), make_song_tile(songs[i], songs, i));
-      }
-      gtk_box_append(home_sections_, make_home_section(title, row));
-    };
-
-    add_album_row("Recently Played", home_recent_);
-    add_album_row("Most Played Albums", home_frequent_);
-    add_artist_row("Top Artists", home_top_artists_);
-    add_album_row("Recently Added", home_newest_);
-    add_album_row("Highest Rated", home_highest_);
-    add_artist_row("Favorite Artists", home_starred_artists_);
-    add_album_row("Favorite Albums", home_starred_albums_);
-    add_song_row("Favorite Songs", home_starred_songs_);
-    add_song_row("Discover", home_random_songs_);
+    rebuild_home_sections();
     set_status("Home updated from server");
   };
 
@@ -1022,6 +991,57 @@ void MainWindow::load_home() {
       });
 }
 
+void MainWindow::rebuild_home_sections() {
+  if (!ui_alive_ || !home_sections_) {
+    return;
+  }
+  clear_container(GTK_WIDGET(home_sections_));
+
+  auto add_album_row = [this](const char* title,
+                              const std::vector<subsonic::Album>& albums) {
+    if (albums.empty()) {
+      return;
+    }
+    auto* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    for (const auto& album : albums) {
+      gtk_box_append(GTK_BOX(row), make_album_tile(album));
+    }
+    gtk_box_append(home_sections_, make_home_section(title, row));
+  };
+  auto add_artist_row = [this](const char* title,
+                               const std::vector<subsonic::Artist>& artists) {
+    if (artists.empty()) {
+      return;
+    }
+    auto* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    for (const auto& artist : artists) {
+      gtk_box_append(GTK_BOX(row), make_artist_tile(artist));
+    }
+    gtk_box_append(home_sections_, make_home_section(title, row));
+  };
+  auto add_song_row = [this](const char* title,
+                             const std::vector<subsonic::Song>& songs) {
+    if (songs.empty()) {
+      return;
+    }
+    auto* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    for (std::size_t i = 0; i < songs.size(); ++i) {
+      gtk_box_append(GTK_BOX(row), make_song_tile(songs[i], songs, i));
+    }
+    gtk_box_append(home_sections_, make_home_section(title, row));
+  };
+
+  add_album_row("Recently Played", home_recent_);
+  add_album_row("Most Played Albums", home_frequent_);
+  add_artist_row("Top Artists", home_top_artists_);
+  add_album_row("Recently Added", home_newest_);
+  add_album_row("Highest Rated", home_highest_);
+  add_artist_row("Favorite Artists", home_starred_artists_);
+  add_album_row("Favorite Albums", home_starred_albums_);
+  add_song_row("Favorite Songs", home_starred_songs_);
+  add_song_row("Discover", home_random_songs_);
+}
+
 void MainWindow::show_connect_dialog(bool force) {
   (void)force;
   auto* dlg = new ConnectDialog(GTK_WINDOW(window_), config_);
@@ -1046,6 +1066,7 @@ void MainWindow::connect_with(const AppConfig& cfg) {
   }
   set_status("Connecting…", 0);
   client_.set_credentials(cfg.server_url, cfg.username, cfg.password);
+  start_library_poller();
   client_.ping([this](std::optional<subsonic::ClientError> err) {
     if (!ui_alive_) {
       return;
@@ -1064,15 +1085,139 @@ void MainWindow::connect_with(const AppConfig& cfg) {
   });
 }
 
+void MainWindow::start_library_poller() {
+  // First background pass ~45s after connect; then every 3 minutes.
+  library_poller_.set_interval(std::chrono::seconds(180));
+  library_poller_.set_update_callback(
+      [this](subsonic::LibrarySnapshot snapshot) {
+        on_library_snapshot(std::move(snapshot));
+      });
+  library_poller_.set_credentials(config_.server_url, config_.username,
+                                  config_.password);
+  library_poller_.start();
+}
+
+void MainWindow::stop_library_poller() {
+  library_poller_.set_update_callback({});
+  library_poller_.clear_credentials();
+  library_poller_.stop();
+}
+
+void MainWindow::populate_artist_list() {
+  if (!GTK_IS_LIST_BOX(artist_list_)) {
+    return;
+  }
+  clear_list(artist_list_);
+  for (const auto& a : artists_) {
+    std::string sub = std::to_string(a.album_count) +
+                      (a.album_count == 1 ? " album" : " albums");
+    const auto badge = format_annotations(a.annotations);
+    if (!badge.empty()) {
+      sub += " · " + badge;
+    }
+    gtk_list_box_append(
+        artist_list_,
+        make_list_row(annotate_title(a.name, a.annotations), sub));
+  }
+}
+
+void MainWindow::populate_album_list() {
+  if (!GTK_IS_LIST_BOX(album_list_)) {
+    return;
+  }
+  clear_list(album_list_);
+  for (const auto& a : albums_) {
+    std::string sub = a.artist;
+    const auto badge = format_annotations(a.annotations);
+    if (!badge.empty()) {
+      sub += " · " + badge;
+    }
+    gtk_list_box_append(
+        album_list_,
+        make_list_row(annotate_title(a.name, a.annotations), sub));
+  }
+}
+
+void MainWindow::on_library_snapshot(subsonic::LibrarySnapshot snapshot) {
+  if (!ui_alive_ || !snapshot.ok) {
+    return;
+  }
+
+  // Apply on the main thread only. Never touch the player or abort UI HTTP.
+  const bool artists_changed =
+      !subsonic::library_artists_equivalent(artists_, snapshot.artists);
+  const bool albums_changed =
+      !subsonic::library_albums_equivalent(albums_, snapshot.albums);
+
+  auto starred_songs = snapshot.home_starred.songs;
+  if (starred_songs.size() > 20) {
+    starred_songs.resize(20);
+  }
+  const bool home_changed =
+      !subsonic::library_albums_equivalent(home_recent_, snapshot.home_recent) ||
+      !subsonic::library_albums_equivalent(home_frequent_,
+                                          snapshot.home_frequent) ||
+      !subsonic::library_albums_equivalent(home_newest_, snapshot.home_newest) ||
+      !subsonic::library_albums_equivalent(home_highest_,
+                                          snapshot.home_highest) ||
+      !subsonic::library_artists_equivalent(home_starred_artists_,
+                                           snapshot.home_starred.artists) ||
+      !subsonic::library_albums_equivalent(home_starred_albums_,
+                                          snapshot.home_starred.albums) ||
+      !subsonic::library_songs_equivalent(home_starred_songs_, starred_songs) ||
+      !subsonic::library_songs_equivalent(home_random_songs_,
+                                         snapshot.home_random_songs);
+
+  if (!artists_changed && !albums_changed && !home_changed) {
+    return;
+  }
+
+  if (artists_changed) {
+    ++artists_load_generation_;
+    artists_ = std::move(snapshot.artists);
+    populate_artist_list();
+  }
+  if (albums_changed) {
+    ++albums_load_generation_;
+    albums_ = std::move(snapshot.albums);
+    populate_album_list();
+  }
+
+  if (home_changed) {
+    // Invalidate any in-flight interactive Home load so it cannot overwrite
+    // this fresher background snapshot.
+    ++home_generation_;
+    home_loads_pending_ = 0;
+    home_recent_ = std::move(snapshot.home_recent);
+    home_frequent_ = std::move(snapshot.home_frequent);
+    home_newest_ = std::move(snapshot.home_newest);
+    home_highest_ = std::move(snapshot.home_highest);
+    home_top_artists_ = artists_from_frequent_albums(home_frequent_, 20);
+    home_starred_artists_ = std::move(snapshot.home_starred.artists);
+    home_starred_albums_ = std::move(snapshot.home_starred.albums);
+    home_starred_songs_ = std::move(starred_songs);
+    home_random_songs_ = std::move(snapshot.home_random_songs);
+    if (current_nav_ == NavPage::Home && !minimal_player_) {
+      rebuild_home_sections();
+      set_status("Home updated from server", 3);
+    }
+  } else if (current_nav_ == NavPage::Artists && artists_changed) {
+    set_status(std::to_string(artists_.size()) + " artists (updated)", 3);
+  } else if (current_nav_ == NavPage::Albums && albums_changed) {
+    set_status(std::to_string(albums_.size()) + " albums (updated)", 3);
+  }
+}
+
 void MainWindow::load_artists() {
   if (!client_.configured()) {
     set_status("Not connected to a server", 5);
     return;
   }
+  const unsigned generation = ++artists_load_generation_;
   set_status("Loading artists…", 0);
-  client_.get_artists([this](std::vector<subsonic::Artist> artists,
-                             std::optional<subsonic::ClientError> err) {
-    if (!ui_alive_) {
+  client_.get_artists([this, generation](std::vector<subsonic::Artist> artists,
+                                         std::optional<subsonic::ClientError> err) {
+    if (!ui_alive_ || generation != artists_load_generation_) {
       return;
     }
     if (err) {
@@ -1080,19 +1225,7 @@ void MainWindow::load_artists() {
       return;
     }
     artists_ = std::move(artists);
-    clear_list(artist_list_);
-    for (const auto& a : artists_) {
-      std::string sub =
-          std::to_string(a.album_count) +
-          (a.album_count == 1 ? " album" : " albums");
-      const auto badge = format_annotations(a.annotations);
-      if (!badge.empty()) {
-        sub += " · " + badge;
-      }
-      gtk_list_box_append(
-          artist_list_,
-          make_list_row(annotate_title(a.name, a.annotations), sub));
-    }
+    populate_artist_list();
     set_status(std::to_string(artists_.size()) + " artists");
   });
 }
@@ -1102,30 +1235,41 @@ void MainWindow::load_albums() {
     set_status("Not connected to a server", 5);
     return;
   }
+  const unsigned generation = ++albums_load_generation_;
+  albums_.clear();
+  clear_list(album_list_);
   set_status("Loading albums…", 0);
+  fetch_albums_page(0, generation);
+}
+
+void MainWindow::fetch_albums_page(int offset, unsigned generation) {
+  constexpr int kPageSize = 500;
   client_.get_album_list(
-      "alphabeticalByName", 500, 0,
-      [this](std::vector<subsonic::Album> albums,
-             std::optional<subsonic::ClientError> err) {
-        if (!ui_alive_) {
+      "alphabeticalByName", kPageSize, offset,
+      [this, offset, generation](std::vector<subsonic::Album> page,
+                                 std::optional<subsonic::ClientError> err) {
+        if (!ui_alive_ || generation != albums_load_generation_) {
           return;
         }
         if (err) {
           set_status(radio::util::friendly_network_message(err->message), 5);
           return;
         }
-        albums_ = std::move(albums);
-        clear_list(album_list_);
-        for (const auto& a : albums_) {
-          std::string sub = a.artist;
-          const auto badge = format_annotations(a.annotations);
-          if (!badge.empty()) {
-            sub += " · " + badge;
-          }
-          gtk_list_box_append(
-              album_list_,
-              make_list_row(annotate_title(a.name, a.annotations), sub));
+
+        const int got = static_cast<int>(page.size());
+        albums_.insert(albums_.end(),
+                       std::make_move_iterator(page.begin()),
+                       std::make_move_iterator(page.end()));
+
+        // Subsonic caps each getAlbumList2 call; keep paging until exhausted.
+        if (got >= kPageSize) {
+          set_status("Loading albums… (" + std::to_string(albums_.size()) + ")",
+                     0);
+          fetch_albums_page(offset + got, generation);
+          return;
         }
+
+        populate_album_list();
         set_status(std::to_string(albums_.size()) + " albums");
       });
 }

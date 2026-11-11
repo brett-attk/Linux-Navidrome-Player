@@ -26,6 +26,7 @@ add_library(radio-core STATIC
   src/cache/cover_cache.cpp
   src/subsonic/client.cpp
   src/subsonic/parse.cpp
+  src/subsonic/library_poller.cpp
   src/audio/player.cpp
   src/queue/play_queue.cpp
   src/discovery/lan_discovery.cpp
@@ -82,6 +83,7 @@ add_executable(radio-tests
   tests/test_client_urls.cpp
   tests/test_beat_math.cpp
   tests/test_scrobble.cpp
+  tests/test_library_poller.cpp
 )
 
 target_include_directories(radio-tests PRIVATE

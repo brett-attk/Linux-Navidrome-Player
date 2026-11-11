@@ -252,6 +252,7 @@ gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || tr
 - Optional **local network discovery** to find a Navidrome server without typing its address
 - **Minimal player** mode: hide the browse panes and shrink to a compact, draggable player window (toggle in the player bar; preference is remembered)
 - **Beat stage** on Home while a song is playing: random on-beat visuals (fireworks, neon bars, color snow, starfield, and more) with shifting colors. Analysis runs on a leaky side-chain so **playback stays primary** if visuals fall behind
+- **Background library sync**: Home rows, artists, and albums refresh periodically on a worker thread with its own network session (~45s after connect, then about every 3 minutes), so new server content appears without navigating away — and without interrupting playback
 
 ---
 

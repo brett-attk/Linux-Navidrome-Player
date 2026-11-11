@@ -5,6 +5,7 @@
 #include "queue/play_queue.hpp"
 #include "session.hpp"
 #include "subsonic/client.hpp"
+#include "subsonic/library_poller.hpp"
 #include "subsonic/models.hpp"
 #include "ui/beat_stage.hpp"
 
@@ -39,8 +40,16 @@ class MainWindow {
   void connect_with(const AppConfig& cfg);
   void set_nav(NavPage page);
   void load_home();
+  void rebuild_home_sections();
+  void refresh_current_view();
   void load_artists();
   void load_albums();
+  void fetch_albums_page(int offset, unsigned generation);
+  void populate_artist_list();
+  void populate_album_list();
+  void start_library_poller();
+  void stop_library_poller();
+  void on_library_snapshot(subsonic::LibrarySnapshot snapshot);
   void show_artist_albums(const subsonic::Artist& artist);
   void show_album_songs(const subsonic::Album& album);
   void update_song_details(const subsonic::Song* song);
@@ -132,6 +141,7 @@ class MainWindow {
   std::vector<GtkToggleButton*> rating_buttons_;
 
   subsonic::Client client_;
+  subsonic::LibraryPoller library_poller_;
   audio::Player player_;
   queue::PlayQueue queue_;
   AppConfig config_;
@@ -168,6 +178,8 @@ class MainWindow {
   // user refreshes before older requests finish.
   int home_loads_pending_ = 0;
   int home_generation_ = 0;
+  unsigned artists_load_generation_ = 0;
+  unsigned albums_load_generation_ = 0;
   unsigned status_clear_id_ = 0;   // g_timeout source id (0 = none)
   unsigned session_save_id_ = 0;
   bool ui_alive_ = false;
